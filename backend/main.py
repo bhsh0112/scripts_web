@@ -35,7 +35,12 @@ try:
     from scripts.mp42mov import convert_to_live_photo  # noqa: E402
 except ModuleNotFoundError:
     convert_to_live_photo = None
-from scripts.scan import get_my_ip, get_network_range, scan_network  # noqa: E402
+from scripts.scan import (  # noqa: E402
+    get_my_ip,
+    get_network_range,
+    scan_network,
+    scan_lan_devices,
+)
 from scripts.URL2mp4 import download_youtube_video  # noqa: E402
 from scripts.yolo.json_to_yolo import decode_json  # noqa: E402
 from scripts.yolo.label_vis import process_all_annotations  # noqa: E402
@@ -183,19 +188,50 @@ async def api_mp4_to_live_photo(
 
 
 @app.post("/api/tasks/network-scan")
-async def api_network_scan(network_range: Optional[str] = Form(None)):
-    target_range = (network_range or "").strip()
-    if not target_range:
-        my_ip = get_my_ip()
-        if not my_ip:
-            raise HTTPException(status_code=500, detail="无法获取本机 IP")
-        target_range = get_network_range(my_ip)
+async def api_network_scan(_: Optional[str] = Form(None)):
+    """
+    局域网扫描：忽略入参，自动识别本机所有活跃网段并扫描。
+    返回按类型分组的设备信息，同时保留 devices 扁平列表（向后兼容）。
+    """
+    result = scan_lan_devices()
+    devices = result.get("devices", [])
+    networks = result.get("networks", [])
+    groups = result.get("groups", {})
 
-    devices = scan_network(target_range)
+    # 为前端提供更友好的中文分组名称
+    label_map = {
+        "camera": "摄像头",
+        "computer": "计算机/服务器",
+        "printer": "打印机",
+        "network": "网络设备",
+        "iot": "物联网设备",
+        "unknown": "未知设备",
+    }
+    grouped = []
+    for key, items in groups.items():
+        grouped.append(
+            {
+                "key": key,
+                "label": label_map.get(key, key),
+                "count": len(items),
+                "devices": [
+                    {
+                        "name": item.get("name"),
+                        "ip": item.get("ip"),
+                        "mac": item.get("mac"),
+                        "hostname": item.get("hostname"),
+                        "open_ports": item.get("open_ports", []),
+                    }
+                    for item in items
+                ],
+            }
+        )
+
     return {
-        "message": f"扫描完成，共发现 {len(devices)} 台设备",
-        "network_range": target_range,
-        "devices": devices,
+        "message": f"扫描完成，发现 {len(devices)} 台设备（{', '.join(networks) or '未知网段'}）",
+        "networks": networks,
+        "devices": devices,  # 保留：[{ip, mac, hostname?, open_ports?, category?, name?}]
+        "groups": grouped,   # 新增：分组输出
     }
 
 

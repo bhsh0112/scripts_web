@@ -777,21 +777,13 @@ const MODULES = [
     name: "局域网设备扫描",
     summary: "快速查看当前网段在线设备列表。",
     description:
-      "使用 `scan.py` 通过 ARP 探测局域网设备，默认扫描本机所在子网。",
+      "使用 `scan.py` 通过 ARP 探测局域网设备，自动识别本机所有活跃网段并扫描。",
     endpoint: "/api/tasks/network-scan",
     tags: [
       { id: "network", label: "网络" },
       { id: "scapy", label: "Scapy" }
     ],
-    fields: [
-      {
-        id: "network_range",
-        type: "text",
-        label: "扫描网段",
-        placeholder: "默认自动识别，如 192.168.1.1/24",
-        description: "可自定义扫描范围，格式遵循 CIDR。"
-      }
-    ],
+    fields: [],
     guide: {
       title: "安全提示",
       tips: [
@@ -1405,7 +1397,41 @@ const renderResult = (form, module, payload) => {
   }
 
   if (previewsEl) {
-    if (Array.isArray(payload.previews) && payload.previews.length > 0) {
+    // 特例：网络扫描结果的分组展示
+    if (module.id === "network-scan" && Array.isArray(payload.groups)) {
+      const networks = Array.isArray(payload.networks) ? payload.networks : [];
+      const groupsHtml = payload.groups
+        .map((group) => {
+          const items = Array.isArray(group.devices)
+            ? group.devices
+                .map((d) => {
+                  const name = typeof d.name === "string" && d.name ? d.name : d.ip;
+                  const ip = d.ip ?? "";
+                  const mac = d.mac ?? "";
+                  const hn = d.hostname ?? "";
+                  const ports = Array.isArray(d.open_ports) ? d.open_ports.join(", ") : "";
+                  return `<li class="result__list-item">
+                    <span class="result__device-name">${name}</span>
+                    <span class="result__device-meta">IP: ${ip}${mac ? ` · MAC: ${mac}` : ""}${hn ? ` · 主机名: ${hn}` : ""}${ports ? ` · 端口: ${ports}` : ""}</span>
+                  </li>`;
+                })
+                .join("")
+            : "";
+          return `
+            <section class="result__group">
+              <header class="result__group-header">
+                <h4 class="result__group-title">${group.label ?? group.key}</h4>
+                <span class="result__group-count">${group.count ?? 0} 台</span>
+              </header>
+              <ul class="result__list">${items || '<li class="result__list-item">暂无设备</li>'}</ul>
+            </section>
+          `;
+        })
+        .join("");
+      const header = `<p class="result__meta">扫描网段：${networks.join(", ") || "未识别"}</p>`;
+      previewsEl.innerHTML = `${header}${groupsHtml}`;
+      previewsEl.hidden = false;
+    } else if (Array.isArray(payload.previews) && payload.previews.length > 0) {
       const isFullPreviewModule = module.id === "images-download";
       const previewItems = payload.previews
         .map((previewUrl, index) => {
