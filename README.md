@@ -94,14 +94,22 @@ source .venv/bin/activate   # Windows 使用 .\.venv\Scripts\activate
 pip install --upgrade pip
 pip install -r backend/requirements.txt
 
-# macOS/Linux 如需原生 ARP 扫描，建议以管理员权限运行
-python scripts/local_scanner_server.py
+# 推荐以模块方式运行（可避免相对导入问题）；ARP 多数系统需要管理员权限
+sudo -E python -m scripts.local_scanner_server
 # 服务器默认监听 http://127.0.0.1:47832
 ```
 
 - 前端在提交“局域网设备扫描”时，会优先尝试请求 `http://127.0.0.1:47832/scan`；
 - 如果无法连接本地助手，则自动回退调用后端 `/api/tasks/network-scan`（扫描服务器所在网段）；
 - `scapy` 在不同系统上可能需要管理员/root 权限或额外授权（macOS 会弹出本地网络访问授权）。
+
+若仍提示“未检测到本地扫描助手”，请排查：
+
+- 本机是否已成功启动：访问 `http://127.0.0.1:47832/health` 应返回 `{"status":"ok"}`；
+- 启动命令是否使用了 `python -m scripts.local_scanner_server`；
+- 浏览器是否通过 `http` 打开前端（若是 `https` 页面，跨域访问 `http://127.0.0.1` 可能被拦截为混合内容）；
+- macOS “系统设置 → 隐私与安全性 → 本地网络”是否允许 Python/终端访问本地网络；
+- 如无管理员权限，ARP 探测可能失败，建议以 `sudo` 运行。
 
 ## 前端站点
 

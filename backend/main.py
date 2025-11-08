@@ -188,7 +188,7 @@ async def api_mp4_to_live_photo(
 
 
 @app.post("/api/tasks/network-scan")
-async def api_network_scan(_: Optional[str] = Form(None)):
+async def api_network_scan(placeholder: Optional[str] = Form(None)):
     """
     局域网扫描：忽略入参，自动识别本机所有活跃网段并扫描。
     返回按类型分组的设备信息，同时保留 devices 扁平列表（向后兼容）。
@@ -287,7 +287,7 @@ async def api_url_to_mp4(video_url: str = Form(...)):
 @app.post("/api/tasks/yolo-json-to-txt")
 async def api_yolo_json_to_txt(
     classes: str = Form(...),
-    json_archive: UploadFile | None = File(None),
+    json_archive: Optional[UploadFile] = File(None),
 ):
     if json_archive is None:
         raise HTTPException(status_code=400, detail="请上传标注压缩包")
@@ -322,8 +322,8 @@ async def api_yolo_json_to_txt(
 
 @app.post("/api/tasks/yolo-label-vis")
 async def api_yolo_label_vis(
-    annotations_archive: UploadFile | None = File(None),
-    images_archive: UploadFile | None = File(None),
+    annotations_archive: Optional[UploadFile] = File(None),
+    images_archive: Optional[UploadFile] = File(None),
     output_dir: str = Form("label_output"),
     suffix: str = Form("_annotated"),
     class_names: str = Form(""),
@@ -348,7 +348,7 @@ async def api_yolo_label_vis(
         raise HTTPException(status_code=400, detail="图片压缩包中未找到图像文件")
 
     output_path = job_dir / (output_dir.strip() or "label_output")
-    classes_list: List[str] | None = None
+    classes_list: Optional[List[str]] = None
     cleaned = class_names.strip()
     if cleaned:
         classes_list = cleaned.split()
@@ -377,7 +377,7 @@ async def api_yolo_label_vis(
 @app.post("/api/tasks/yolo-write-img-path")
 async def api_yolo_write_img_path(
     images_root: str = Form(...),
-    image_sets_archive: UploadFile | None = File(None),
+    image_sets_archive: Optional[UploadFile] = File(None),
     image_ext: str = Form(".jpg"),
 ):
     job_id, job_dir = create_job_dir("yolo-write-img-path")
@@ -415,7 +415,7 @@ async def api_yolo_write_img_path(
 
 @app.post("/api/tasks/yolo-split-dataset")
 async def api_yolo_split_dataset(
-    xml_archive: UploadFile | None = File(None),
+    xml_archive: Optional[UploadFile] = File(None),
     trainval_ratio: Optional[float] = Form(None),
     train_ratio: Optional[float] = Form(None),
 ):
