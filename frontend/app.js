@@ -43,6 +43,94 @@ const getBackendBaseUrl = () => {
  */
 const BACKEND_BASE_URL = getBackendBaseUrl();
 
+const IMAGE_PREVIEW_OVERLAY_ID = "image-preview-overlay";
+
+let imagePreviewOverlayRef = null;
+let imagePreviewImageRef = null;
+
+/**
+ * 确保图片预览浮层已创建。
+ * @returns {void}
+ */
+const ensureImagePreviewer = () => {
+  if (
+    imagePreviewOverlayRef instanceof HTMLDivElement &&
+    imagePreviewImageRef instanceof HTMLImageElement
+  ) {
+    return;
+  }
+
+  const existing = document.getElementById(IMAGE_PREVIEW_OVERLAY_ID);
+  if (existing instanceof HTMLDivElement) {
+    imagePreviewOverlayRef = existing;
+    imagePreviewImageRef = existing.querySelector("img");
+    return;
+  }
+
+  const overlay = document.createElement("div");
+  overlay.id = IMAGE_PREVIEW_OVERLAY_ID;
+  overlay.className = "image-preview";
+  overlay.innerHTML = `
+    <div class="image-preview__backdrop" data-preview-dismiss></div>
+    <div class="image-preview__content" role="dialog" aria-modal="true">
+      <button class="image-preview__close" type="button" data-preview-dismiss aria-label="关闭预览">
+        &times;
+      </button>
+      <img class="image-preview__image" src="" alt="" />
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  imagePreviewOverlayRef = overlay;
+  imagePreviewImageRef = overlay.querySelector(".image-preview__image");
+
+  const dismissElements = overlay.querySelectorAll("[data-preview-dismiss]");
+  dismissElements.forEach((element) => {
+    element.addEventListener("click", () => {
+      hideImagePreview();
+    });
+  });
+};
+
+/**
+ * 显示图片预览。
+ * @param {string} src 图片地址
+ * @param {string} alt 图片描述
+ * @returns {void}
+ */
+const showImagePreview = (src, alt) => {
+  ensureImagePreviewer();
+  if (
+    !(imagePreviewOverlayRef instanceof HTMLDivElement) ||
+    !(imagePreviewImageRef instanceof HTMLImageElement)
+  ) {
+    return;
+  }
+
+  imagePreviewImageRef.src = src;
+  imagePreviewImageRef.alt = alt || "图片预览";
+  imagePreviewOverlayRef.classList.add("image-preview--visible");
+  document.body.classList.add("image-preview--locked");
+};
+
+/**
+ * 隐藏图片预览。
+ * @returns {void}
+ */
+const hideImagePreview = () => {
+  if (!(imagePreviewOverlayRef instanceof HTMLDivElement)) {
+    return;
+  }
+  imagePreviewOverlayRef.classList.remove("image-preview--visible");
+  document.body.classList.remove("image-preview--locked");
+};
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    hideImagePreview();
+  }
+});
+
 /**
  * 解析模块配置中的 endpoint，得到完整的请求 URL。
  * @param {string} endpoint 相对或绝对地址
@@ -1328,11 +1416,16 @@ const renderResult = (form, module, payload) => {
           const filename = previewUrl.split("/").pop() || `file-${index + 1}`;
           return `
             <figure class="preview-grid__item">
-              <a class="preview-grid__link" href="${fullUrl}" target="_blank" rel="noopener noreferrer">
+              <button
+                class="preview-grid__image-button"
+                type="button"
+                data-preview-full="${fullUrl}"
+                data-preview-alt="${module.name} 预览图 ${index + 1}"
+              >
                 <img class="preview-grid__image" src="${fullUrl}" alt="${module.name} 预览图 ${index + 1}" loading="lazy" />
-              </a>
+              </button>
               <figcaption class="preview-grid__caption">
-                <span>预览 ${index + 1}</span>
+                <span class="preview-grid__label">预览 ${index + 1}</span>
                 <a class="preview-grid__download" href="${fullUrl}" download="${filename}">下载</a>
               </figcaption>
             </figure>
@@ -1491,6 +1584,16 @@ const bindEvents = () => {
       event.preventDefault();
       window.location.hash = "";
     }
+
+    const previewTrigger = target.closest("[data-preview-full]");
+    if (previewTrigger) {
+      event.preventDefault();
+      const src = previewTrigger.getAttribute("data-preview-full") ?? "";
+      if (src !== "") {
+        const alt = previewTrigger.getAttribute("data-preview-alt") ?? "";
+        showImagePreview(src, alt);
+      }
+    }
   });
 
   document.body.addEventListener("submit", (event) => {
@@ -1526,6 +1629,7 @@ const bootstrap = () => {
   if (yearEl) {
     yearEl.textContent = String(new Date().getFullYear());
   }
+  ensureImagePreviewer();
 };
 
 bootstrap();
