@@ -9,8 +9,9 @@ from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from urllib.parse import quote, unquote
 
 from .utils import (
     BASE_DIR,
@@ -346,7 +347,8 @@ async def api_mp3_to_qrcode(
     # 构造音频的相对与绝对 URL
     audio_rel_url = build_file_url(audio_path)
     base_url = str(request.base_url).rstrip("/")
-    audio_abs_url = f"{base_url}{audio_rel_url}"
+    # 播放页 URL（更友好的扫码播放界面）
+    page_url = f"{base_url}/listen?file={quote(audio_rel_url, safe='')}&title={quote(audio.filename, safe='')}"
 
     # 生成二维码（PNG）
     png_path = job_dir / "qrcode.png"
@@ -360,7 +362,7 @@ async def api_mp3_to_qrcode(
             box_size=10,
             border=2,
         )
-        qr.add_data(audio_abs_url)
+        qr.add_data(page_url)
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
         img.save(png_path)
@@ -376,6 +378,145 @@ async def api_mp3_to_qrcode(
         "audio_url": audio_rel_url,        # 便于前端可选显示
         "total_files": 2,
     }
+
+@app.get("/listen")
+def listen_page(request: Request, file: str, title: Optional[str] = None) -> HTMLResponse:
+    """
+    简洁美观的音频播放页面。
+    通过查询参数 `file`（应以 /files/ 开头的相对 URL）来定位音频文件。
+    可选 `title` 指定页面标题/显示名。
+    """
+    try:
+        cleaned = (file or "").strip()
+        if not cleaned.startswith("/files/"):
+            raise ValueError("非法文件路径")
+        # 解析相对路径并校验物理文件存在
+        rel = cleaned[len("/files/") :]
+        audio_path = STORAGE_DIR / rel
+        if not audio_path.exists() or not audio_path.is_file():
+            raise FileNotFoundError("音频文件不存在")
+        if audio_path.suffix.lower() != ".mp3":
+            raise ValueError("仅支持 .mp3 文件")
+    except Exception as exc:  # noqa: BLE001
+        return HTMLResponse(
+            content=f"<h1>无法播放</h1><p>{str(exc)}</p>",
+            status_code=404,
+        )
+
+    base_url = str(request.base_url).rstrip("/")
+    audio_url = f"{base_url}{cleaned}"
+    display_title = (title or audio_path.stem).strip() or "音频播放"
+
+    # 内联样式与播放页 HTML
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{display_title}</title>
+    <meta name="theme-color" content="#111827" />
+    <meta property="og:title" content="{display_title}" />
+    <meta property="og:type" content="music.song" />
+    <meta property="og:audio" content="{audio_url}" />
+    <style>
+      :root {{
+        --bg: #0f172a;
+        --card: #111827;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+        --accent: #22d3ee;
+        --accent2: #a78bfa;
+      }}
+      * {{ box-sizing: border-box; }}
+      html, body {{ height: 100%; }}
+      body {{
+        margin: 0; background: linear-gradient(135deg, var(--bg), #0b1225);
+        color: var(--text); font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";
+        display: grid; place-items: center; padding: 24px;
+      }}
+      .card {{
+        width: min(720px, 100%);
+        background: radial-gradient(1200px 400px at -10% -20%, rgba(34,211,238,0.12), transparent 60%),
+                    radial-gradient(800px 300px at 120% 0%, rgba(167,139,250,0.12), transparent 60%),
+                    var(--card);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 16px;
+        padding: 28px 24px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+      }}
+      .title {{
+        margin: 0 0 8px; font-size: 22px; font-weight: 700; letter-spacing: .3px;
+      }}
+      .subtitle {{
+        margin: 0 0 20px; font-size: 14px; color: var(--muted);
+      }}
+      .player {{
+        display: grid; gap: 16px;
+      }}
+      .cover {{
+        width: 100%; aspect-ratio: 16/9; border-radius: 12px;
+        background: linear-gradient(135deg, rgba(34,211,238,0.25), rgba(167,139,250,0.25));
+        display: grid; place-items: center; color: rgba(255,255,255,0.8);
+        border: 1px solid rgba(255,255,255,0.08);
+      }}
+      .cover-icon {{
+        width: 56px; height: 56px;
+        background: linear-gradient(135deg, var(--accent), var(--accent2));
+        -webkit-mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill=\"%23fff\" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>') no-repeat center / 80% 80%;
+        mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill=\"%23fff\" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>') no-repeat center / 80% 80%;
+        border-radius: 12px;
+      }}
+      audio {{
+        width: 100%;
+        filter: drop-shadow(0 2px 8px rgba(0,0,0,0.25));
+      }}
+      .actions {{
+        display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px;
+      }}
+      .btn {{
+        padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(255,255,255,0.04); color: var(--text); cursor: pointer;
+        transition: transform .08s ease, background .2s ease, border-color .2s ease;
+      }}
+      .btn:hover {{ transform: translateY(-1px); background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.18); }}
+      .link {{ text-decoration: none; color: inherit; }}
+      .hint {{ font-size: 12px; color: var(--muted); margin-top: 8px; }}
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1 class="title">{display_title}</h1>
+      <p class="subtitle">扫码直达 · 简洁播放页</p>
+      <section class="player">
+        <div class="cover"><div class="cover-icon"></div></div>
+        <audio controls preload="metadata" src="{audio_url}"></audio>
+        <div class="actions">
+          <a class="btn link" href="{audio_url}" download>下载音频</a>
+          <button class="btn" id="copyLink">复制播放链接</button>
+        </div>
+        <p class="hint">如无法自动播放，请点击播放按钮或使用系统播放器打开。</p>
+      </section>
+    </main>
+    <script>
+      (function() {{
+        const btn = document.getElementById('copyLink');
+        if (btn && navigator.clipboard) {{
+          btn.addEventListener('click', async () => {{
+            try {{
+              await navigator.clipboard.writeText('{audio_url}');
+              btn.textContent = '已复制';
+              setTimeout(() => (btn.textContent = '复制播放链接'), 1500);
+            }} catch (e) {{
+              btn.textContent = '复制失败';
+              setTimeout(() => (btn.textContent = '复制播放链接'), 1500);
+            }}
+          }});
+        }}
+      }})();
+    </script>
+  </body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 @app.post("/api/tasks/yolo-json-to-txt")

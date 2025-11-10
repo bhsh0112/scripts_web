@@ -159,6 +159,14 @@ python -m http.server 4173
 | `/api/tasks/yolo-write-img-path` | `images_root`、`image_sets_archive`、`image_ext` | `archive`、`files` |
 | `/api/tasks/yolo-split-dataset` | `xml_archive`、`trainval_ratio`、`train_ratio` | `archive`、`files` |
 
+### 播放页
+
+- 扫描“MP3 扫码播放”生成的二维码将打开美化的播放页（路径 `/listen?file=/files/.../xxx.mp3&title=...`），页面包含：
+  - 居中卡片式布局、渐变背景与简洁标题
+  - 原生音频控件（手机端可直接播放）
+  - “下载音频”与“一键复制播放链接”
+  - Open Graph 元信息，便于社交或 IM 预览
+
 所有响应均遵循 JSON 结构，包含 `message` 字段描述执行结果，若生成文件则附带可下载的相对路径，前端会自动补全为可访问 URL。
 
 ## 常用命令与调试建议
