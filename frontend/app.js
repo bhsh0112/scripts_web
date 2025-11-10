@@ -665,6 +665,88 @@ const renderExtractFramesFields = (module) => {
 };
 
 /**
+ * 渲染“二维码生成”模块（支持 URL/MP3 两种输入模态）。
+ * @param {Module} module 模块配置
+ * @returns {string}
+ */
+const renderQrcodeFields = (_module) => {
+  return `
+    <div class="segmented" role="tablist" aria-label="输入类型" data-qrcode-toggle>
+      <button class="segmented__item is-active" type="button" role="tab" aria-selected="true" data-mode="url">网站</button>
+      <button class="segmented__item" type="button" role="tab" aria-selected="false" data-mode="mp3">MP3</button>
+    </div>
+    <input type="hidden" name="mode" value="url" data-qrcode-mode />
+
+    <div class="form__group" data-url-group>
+      <label class="form__label" for="qrcode-target-url">网址链接<sup>*</sup></label>
+      <input class="input" type="text" name="target_url" id="qrcode-target-url" placeholder="https://example.com" />
+      <p class="form__hint">请输入完整链接（含 http/https），生成网页访问二维码。</p>
+    </div>
+
+    <div class="form__group" data-audio-group hidden>
+      <label class="form__label" for="qrcode-audio">MP3 文件<sup>*</sup></label>
+      <input class="input" type="file" name="audio" id="qrcode-audio" accept="audio/mpeg,.mp3,audio/*" />
+      <p class="form__hint">上传 .mp3 后将生成“美化播放页”的二维码，扫码后直接播放。</p>
+    </div>
+  `;
+};
+
+/**
+ * 初始化“二维码生成”模块交互。
+ * @param {HTMLFormElement | null} form 表单元素
+ * @returns {void}
+ */
+const setupQrcodeForm = (form) => {
+  if (!(form instanceof HTMLFormElement)) {
+    return;
+  }
+  const hiddenMode = form.querySelector("[data-qrcode-mode]");
+  const toggle = form.querySelector("[data-qrcode-toggle]");
+  const urlGroup = form.querySelector("[data-url-group]");
+  const audioGroup = form.querySelector("[data-audio-group]");
+  if (!(hiddenMode instanceof HTMLInputElement) || !toggle || !urlGroup || !audioGroup) {
+    return;
+  }
+  const updateVisibility = () => {
+    const mode = hiddenMode.value === "mp3" ? "mp3" : "url";
+    const isMp3 = mode === "mp3";
+    urlGroup.hidden = isMp3;
+    audioGroup.hidden = !isMp3;
+    // 启用/禁用非当前模态输入，避免视觉或校验干扰
+    const urlInput = urlGroup.querySelector("input[name='target_url']");
+    const audioInput = audioGroup.querySelector("input[name='audio']");
+    if (urlInput instanceof HTMLInputElement) {
+      urlInput.disabled = isMp3;
+      if (isMp3) urlInput.value = "";
+    }
+    if (audioInput instanceof HTMLInputElement) {
+      audioInput.disabled = !isMp3;
+      if (!isMp3) audioInput.value = "";
+    }
+  };
+
+  toggle.addEventListener("click", (ev) => {
+    const target = ev.target;
+    if (!(target instanceof HTMLElement)) return;
+    const btn = target.closest("[data-mode]");
+    if (!btn) return;
+    const mode = btn.getAttribute("data-mode") === "mp3" ? "mp3" : "url";
+    hiddenMode.value = mode;
+    // 选中态
+    const items = toggle.querySelectorAll(".segmented__item");
+    items.forEach((el) => {
+      el.classList.toggle("is-active", el === btn);
+      el.setAttribute("aria-selected", el === btn ? "true" : "false");
+    });
+    updateVisibility();
+  });
+
+  // 初始状态
+  hiddenMode.value = "url";
+  updateVisibility();
+};
+
+/**
  * 初始化抽帧模块交互。
  * @param {HTMLFormElement | null} form 表单元素
  * @returns {void}
@@ -1080,60 +1162,27 @@ const MODULES = [
     }
   },
   {
-    id: "url-to-qrcode",
-    name: "URL 转二维码",
-    summary: "输入网址，生成可扫码访问的二维码图片。",
+    id: "qrcode-generator",
+    name: "二维码生成",
+    summary: "在一个模块内生成网址/音频的二维码。",
     description:
-      "提交任意可访问的网址，后台将生成 PNG 格式的二维码，移动端扫码即可打开对应页面。",
-    endpoint: "/api/tasks/url-to-qrcode",
+      "支持两种输入模态：网址链接（生成访问二维码）或 MP3 文件（生成美化播放页二维码）。",
+    endpoint: "/api/tasks/url-to-qrcode", // 默认占位，实际按模态切换
     tags: [
       { id: "tool", label: "工具" },
-      { id: "qrcode", label: "二维码" }
+      { id: "qrcode", label: "二维码" },
+      { id: "audio", label: "音频" }
     ],
     fields: [
-      {
-        id: "target_url",
-        type: "text",
-        label: "网址链接",
-        placeholder: "https://example.com",
-        required: true,
-        description: "请输入完整链接（含 http/https）。"
-      }
+      { id: "mode", type: "select", label: "输入类型", options: ["url", "mp3"] },
+      { id: "target_url", type: "text", label: "网址链接", placeholder: "https://example.com" },
+      { id: "audio", type: "file", label: "MP3 文件", accept: "audio/mpeg,.mp3,audio/*" }
     ],
     guide: {
       title: "使用提示",
       tips: [
-        "生成后可直接在结果中预览与下载二维码图片。",
-        "请确保目标链接可在当前网络环境正常访问。"
-      ]
-    }
-  },
-  {
-    id: "mp3-to-qrcode",
-    name: "MP3 扫码播放",
-    summary: "上传 MP3，生成可扫码播放的二维码。",
-    description:
-      "网站托管你上传的 MP3，并生成指向该音频文件的二维码，手机扫码即可直接播放。",
-    endpoint: "/api/tasks/mp3-to-qrcode",
-    tags: [
-      { id: "tool", label: "工具" },
-      { id: "audio", label: "音频" }
-    ],
-    fields: [
-      {
-        id: "audio",
-        type: "file",
-        label: "MP3 文件",
-        accept: "audio/mpeg,.mp3,audio/*",
-        required: true,
-        description: "仅支持 .mp3 文件，建议文件名使用英文/数字。"
-      }
-    ],
-    guide: {
-      title: "使用说明",
-      tips: [
-        "提交后结果中会展示二维码预览与音频文件链接。",
-        "二维码内容为音频的绝对 URL，扫码即可在手机端直接播放。"
+        "选择“网址链接”时，填写完整的 http/https 链接。",
+        "选择“MP3 文件”时，上传 .mp3，二维码将指向美化播放页。"
       ]
     }
   },
@@ -1646,7 +1695,9 @@ const renderModule = (moduleId) => {
   const fields =
     target.id === "extract-frames"
       ? renderExtractFramesFields(target)
-      : target.fields.map(renderField).join("");
+      : target.id === "qrcode-generator"
+        ? renderQrcodeFields(target)
+        : target.fields.map(renderField).join("");
 
   const localHelper =
     target.id === "network-scan"
@@ -1705,6 +1756,9 @@ const renderModule = (moduleId) => {
   if (target.id === "extract-frames") {
     const formEl = document.querySelector(`[data-module-form="${target.id}"]`);
     setupExtractFramesForm(formEl);
+  } else if (target.id === "qrcode-generator") {
+    const formEl = document.querySelector(`[data-module-form="${target.id}"]`);
+    setupQrcodeForm(formEl);
   }
 };
 
@@ -1867,7 +1921,7 @@ const renderResult = (form, module, payload) => {
       previewsEl.hidden = false;
     } else if (Array.isArray(payload.previews) && payload.previews.length > 0) {
       const isFullPreviewModule = module.id === "images-download";
-      const isQrModule = module.id === "url-to-qrcode" || module.id === "mp3-to-qrcode";
+      const isQrModule = module.id === "qrcode-generator" || module.id === "url-to-qrcode" || module.id === "mp3-to-qrcode";
       const previewItems = payload.previews
         .map((previewUrl, index) => {
           if (typeof previewUrl !== "string") {
@@ -2024,7 +2078,16 @@ const handleSubmit = async (event) => {
     // 默认：调用后端接口
     {
       const formData = serializeForm(form);
-      const endpoint = resolveEndpointUrl(module.endpoint);
+      // 特例：二维码生成模块根据模态切换不同后端接口
+      let endpoint = resolveEndpointUrl(module.endpoint);
+      if (module.id === "qrcode-generator") {
+        const modeEl = form.querySelector('[name="mode"]');
+        const mode = modeEl && modeEl.value === "mp3" ? "mp3" : "url";
+        endpoint =
+          mode === "mp3"
+            ? resolveEndpointUrl("/api/tasks/mp3-to-qrcode")
+            : resolveEndpointUrl("/api/tasks/url-to-qrcode");
+      }
       const response = await fetch(endpoint, {
         method: "POST",
         body: formData
