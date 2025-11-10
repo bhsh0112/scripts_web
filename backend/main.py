@@ -458,6 +458,7 @@ def listen_page(request: Request, file: str, title: Optional[str] = None) -> HTM
         background: linear-gradient(135deg, rgba(34,211,238,0.25), rgba(167,139,250,0.25));
         display: grid; place-items: center; color: rgba(255,255,255,0.8);
         border: 1px solid rgba(255,255,255,0.08);
+        cursor: pointer; appearance: none; -webkit-appearance: none; outline: none; background-clip: padding-box;
       }}
       .cover-icon {{
         width: 56px; height: 56px;
@@ -488,8 +489,10 @@ def listen_page(request: Request, file: str, title: Optional[str] = None) -> HTM
       <h1 class="title">{display_title}</h1>
       <p class="subtitle">扫码直达 · 简洁播放页</p>
       <section class="player">
-        <div class="cover"><div class="cover-icon"></div></div>
-        <audio controls preload="metadata" src="{audio_url}"></audio>
+        <button class="cover" id="coverPlay" type="button" aria-label="播放">
+          <span class="cover-icon" aria-hidden="true"></span>
+        </button>
+        <audio id="player" controls preload="metadata" src="{audio_url}"></audio>
         <div class="actions">
           <a class="btn link" href="{audio_url}" download>下载音频</a>
           <button class="btn" id="copyLink">复制播放链接</button>
@@ -511,6 +514,23 @@ def listen_page(request: Request, file: str, title: Optional[str] = None) -> HTM
               setTimeout(() => (btn.textContent = '复制播放链接'), 1500);
             }}
           }});
+        }}
+        /**
+         * @description 点击封面按钮触发播放；播放时隐藏封面，暂停/结束时显示
+         */
+        const coverBtn = document.getElementById('coverPlay');
+        const audioEl = document.getElementById('player');
+        if (coverBtn && audioEl) {{
+          coverBtn.addEventListener('click', () => {{
+            audioEl.play().catch(() => {{}}); 
+          }});
+          const sync = () => {{
+            coverBtn.style.display = audioEl.paused ? 'grid' : 'none';
+          }};
+          audioEl.addEventListener('play', sync);
+          audioEl.addEventListener('pause', sync);
+          audioEl.addEventListener('ended', sync);
+          sync();
         }}
       }})();
     </script>
