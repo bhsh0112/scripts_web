@@ -1867,6 +1867,7 @@ const renderResult = (form, module, payload) => {
       previewsEl.hidden = false;
     } else if (Array.isArray(payload.previews) && payload.previews.length > 0) {
       const isFullPreviewModule = module.id === "images-download";
+      const isQrModule = module.id === "url-to-qrcode" || module.id === "mp3-to-qrcode";
       const previewItems = payload.previews
         .map((previewUrl, index) => {
           if (typeof previewUrl !== "string") {
@@ -1895,7 +1896,8 @@ const renderResult = (form, module, payload) => {
       const header = `<p class="result__meta">结果预览（${isFullPreviewModule ? "共" : "展示前"} ${
         payload.previews.length
       } 项）</p>`;
-      previewsEl.innerHTML = `${header}<div class="preview-grid">${previewItems}</div>`;
+      const gridClass = `preview-grid${isQrModule ? " preview-grid--qrcode" : ""}`;
+      previewsEl.innerHTML = `${header}<div class="${gridClass}">${previewItems}</div>`;
       previewsEl.hidden = false;
     } else {
       previewsEl.hidden = true;
