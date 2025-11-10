@@ -154,6 +154,7 @@ python -m http.server 4173
 | `/api/tasks/url-to-mp4` | `video_url` | `archive`、`files` |
 | `/api/tasks/url-to-qrcode` | `target_url` | `files`、`previews` |
 | `/api/tasks/mp3-to-qrcode` | `audio`（.mp3 文件） | `files`、`previews` |
+| `/api/tasks/video-to-qrcode` | `video`（.mp4/.mov/.m4v/.webm） | `files`、`previews` |
 | `/api/tasks/yolo-json-to-txt` | `classes`、`json_archive` | `archive`、`files` |
 | `/api/tasks/yolo-label-vis` | `annotations_archive`、`images_archive`、`class_names` | `archive`、`files` |
 | `/api/tasks/yolo-write-img-path` | `images_root`、`image_sets_archive`、`image_ext` | `archive`、`files` |
@@ -165,6 +166,12 @@ python -m http.server 4173
   - 居中卡片式布局、渐变背景与简洁标题
   - 原生音频控件（手机端可直接播放）
   - “下载音频”与“一键复制播放链接”
+  - Open Graph 元信息，便于社交或 IM 预览
+  
+- 扫描“视频扫码播放”生成的二维码将打开美化的观看页（路径 `/watch?file=/files/.../xxx.mp4&title=...`），页面包含：
+  - 暗色渐变背景与卡片式观看容器
+  - 原生视频控件、移动端 `playsinline` 支持
+  - “下载视频”与“一键复制观看链接”
   - Open Graph 元信息，便于社交或 IM 预览
 
 所有响应均遵循 JSON 结构，包含 `message` 字段描述执行结果，若生成文件则附带可下载的相对路径，前端会自动补全为可访问 URL。

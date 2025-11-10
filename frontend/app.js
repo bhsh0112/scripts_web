@@ -674,6 +674,7 @@ const renderQrcodeFields = (_module) => {
     <div class="segmented" role="tablist" aria-label="输入类型" data-qrcode-toggle>
       <button class="segmented__item is-active" type="button" role="tab" aria-selected="true" data-mode="url">网站</button>
       <button class="segmented__item" type="button" role="tab" aria-selected="false" data-mode="mp3">MP3</button>
+      <button class="segmented__item" type="button" role="tab" aria-selected="false" data-mode="video">视频</button>
     </div>
     <input type="hidden" name="mode" value="url" data-qrcode-mode />
 
@@ -687,6 +688,12 @@ const renderQrcodeFields = (_module) => {
       <label class="form__label" for="qrcode-audio">MP3 文件<sup>*</sup></label>
       <input class="input" type="file" name="audio" id="qrcode-audio" accept="audio/mpeg,.mp3,audio/*" />
       <p class="form__hint">上传 .mp3 后将生成“美化播放页”的二维码，扫码后直接播放。</p>
+    </div>
+
+    <div class="form__group" data-video-group hidden>
+      <label class="form__label" for="qrcode-video">视频文件<sup>*</sup></label>
+      <input class="input" type="file" name="video" id="qrcode-video" accept="video/*" />
+      <p class="form__hint">支持常见视频格式（如 mp4/mov/webm），将生成“美化观看页”的二维码。</p>
     </div>
   `;
 };
@@ -704,24 +711,32 @@ const setupQrcodeForm = (form) => {
   const toggle = form.querySelector("[data-qrcode-toggle]");
   const urlGroup = form.querySelector("[data-url-group]");
   const audioGroup = form.querySelector("[data-audio-group]");
-  if (!(hiddenMode instanceof HTMLInputElement) || !toggle || !urlGroup || !audioGroup) {
+  const videoGroup = form.querySelector("[data-video-group]");
+  if (!(hiddenMode instanceof HTMLInputElement) || !toggle || !urlGroup || !audioGroup || !videoGroup) {
     return;
   }
   const updateVisibility = () => {
-    const mode = hiddenMode.value === "mp3" ? "mp3" : "url";
+    const mode = hiddenMode.value === "mp3" ? "mp3" : hiddenMode.value === "video" ? "video" : "url";
     const isMp3 = mode === "mp3";
-    urlGroup.hidden = isMp3;
+    const isVideo = mode === "video";
+    urlGroup.hidden = isMp3 || isVideo;
     audioGroup.hidden = !isMp3;
+    videoGroup.hidden = !isVideo;
     // 启用/禁用非当前模态输入，避免视觉或校验干扰
     const urlInput = urlGroup.querySelector("input[name='target_url']");
     const audioInput = audioGroup.querySelector("input[name='audio']");
+    const videoInput = videoGroup.querySelector("input[name='video']");
     if (urlInput instanceof HTMLInputElement) {
-      urlInput.disabled = isMp3;
-      if (isMp3) urlInput.value = "";
+      urlInput.disabled = isMp3 || isVideo;
+      if (isMp3 || isVideo) urlInput.value = "";
     }
     if (audioInput instanceof HTMLInputElement) {
       audioInput.disabled = !isMp3;
       if (!isMp3) audioInput.value = "";
+    }
+    if (videoInput instanceof HTMLInputElement) {
+      videoInput.disabled = !isVideo;
+      if (!isVideo) videoInput.value = "";
     }
   };
 
@@ -730,7 +745,8 @@ const setupQrcodeForm = (form) => {
     if (!(target instanceof HTMLElement)) return;
     const btn = target.closest("[data-mode]");
     if (!btn) return;
-    const mode = btn.getAttribute("data-mode") === "mp3" ? "mp3" : "url";
+    const attr = btn.getAttribute("data-mode");
+    const mode = attr === "mp3" ? "mp3" : attr === "video" ? "video" : "url";
     hiddenMode.value = mode;
     // 选中态
     const items = toggle.querySelectorAll(".segmented__item");
@@ -2082,11 +2098,14 @@ const handleSubmit = async (event) => {
       let endpoint = resolveEndpointUrl(module.endpoint);
       if (module.id === "qrcode-generator") {
         const modeEl = form.querySelector('[name="mode"]');
-        const mode = modeEl && modeEl.value === "mp3" ? "mp3" : "url";
-        endpoint =
-          mode === "mp3"
-            ? resolveEndpointUrl("/api/tasks/mp3-to-qrcode")
-            : resolveEndpointUrl("/api/tasks/url-to-qrcode");
+        const mode = modeEl && modeEl.value === "mp3" ? "mp3" : modeEl && modeEl.value === "video" ? "video" : "url";
+        if (mode === "mp3") {
+          endpoint = resolveEndpointUrl("/api/tasks/mp3-to-qrcode");
+        } else if (mode === "video") {
+          endpoint = resolveEndpointUrl("/api/tasks/video-to-qrcode");
+        } else {
+          endpoint = resolveEndpointUrl("/api/tasks/url-to-qrcode");
+        }
       }
       const response = await fetch(endpoint, {
         method: "POST",

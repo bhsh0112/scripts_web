@@ -519,6 +519,183 @@ def listen_page(request: Request, file: str, title: Optional[str] = None) -> HTM
     return HTMLResponse(content=html)
 
 
+@app.post("/api/tasks/video-to-qrcode")
+async def api_video_to_qrcode(
+    request: Request,
+    video: UploadFile = File(...),
+):
+    """
+    接收用户上传的视频文件，保存并生成指向“美化观看页”的二维码。
+    观看页地址形如 /watch?file=/files/.../xxx.mp4&title=...，扫码后直接播放。
+    """
+    job_id, job_dir = create_job_dir("video-to-qrcode")
+    video_path = job_dir / video.filename
+    save_upload_file(video, video_path)
+
+    # 简单格式校验（常见视频后缀）
+    valid_exts = {".mp4", ".mov", ".m4v", ".webm"}
+    if video_path.suffix.lower() not in valid_exts:
+        raise HTTPException(status_code=400, detail=f"仅支持视频文件（{', '.join(sorted(valid_exts))}）")
+
+    # 构造视频相对 URL 与观看页 URL
+    video_rel_url = build_file_url(video_path)
+    base_url = str(request.base_url).rstrip("/")
+    page_url = f"{base_url}/watch?file={quote(video_rel_url, safe='')}&title={quote(video.filename, safe='')}"
+
+    # 生成二维码
+    png_path = job_dir / "qrcode.png"
+    try:
+        import qrcode  # type: ignore
+        from qrcode.constants import ERROR_CORRECT_M  # type: ignore
+
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=ERROR_CORRECT_M,
+            box_size=10,
+            border=2,
+        )
+        qr.add_data(page_url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        img.save(png_path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    qr_url = build_file_url(png_path)
+    return {
+        "message": "已生成视频观看页二维码",
+        "job_id": job_id,
+        "files": [qr_url, video_rel_url],
+        "previews": [qr_url],
+        "video_url": video_rel_url,
+        "total_files": 2,
+    }
+
+
+@app.get("/watch")
+def watch_page(request: Request, file: str, title: Optional[str] = None) -> HTMLResponse:
+    """
+    简洁美观的视频播放页面。
+    通过查询参数 `file`（应以 /files/ 开头的相对 URL）来定位视频文件。
+    可选 `title` 指定页面标题/显示名。
+    """
+    try:
+        cleaned = (file or "").strip()
+        if not cleaned.startswith("/files/"):
+            raise ValueError("非法文件路径")
+        rel = cleaned[len("/files/") :]
+        video_path = STORAGE_DIR / rel
+        if not video_path.exists() or not video_path.is_file():
+            raise FileNotFoundError("视频文件不存在")
+        if video_path.suffix.lower() not in {".mp4", ".mov", ".m4v", ".webm"}:
+            raise ValueError("暂不支持该视频格式")
+    except Exception as exc:  # noqa: BLE001
+        return HTMLResponse(
+            content=f"<h1>无法播放</h1><p>{str(exc)}</p>",
+            status_code=404,
+        )
+
+    base_url = str(request.base_url).rstrip("/")
+    video_url = f"{base_url}{cleaned}"
+    display_title = (title or video_path.stem).strip() or "视频播放"
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{display_title}</title>
+    <meta name="theme-color" content="#111827" />
+    <meta property="og:title" content="{display_title}" />
+    <meta property="og:type" content="video.other" />
+    <meta property="og:video" content="{video_url}" />
+    <style>
+      :root {{
+        --bg: #0f172a;
+        --card: #111827;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+        --accent: #22d3ee;
+        --accent2: #a78bfa;
+      }}
+      * {{ box-sizing: border-box; }}
+      html, body {{ height: 100%; }}
+      body {{
+        margin: 0; background: linear-gradient(135deg, var(--bg), #0b1225);
+        color: var(--text); font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";
+        display: grid; place-items: center; padding: 24px;
+      }}
+      .card {{
+        width: min(960px, 100%);
+        background: radial-gradient(1200px 400px at -10% -20%, rgba(34,211,238,0.12), transparent 60%),
+                    radial-gradient(800px 300px at 120% 0%, rgba(167,139,250,0.12), transparent 60%),
+                    var(--card);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 16px;
+        padding: 28px 24px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+      }}
+      .title {{
+        margin: 0 0 8px; font-size: 22px; font-weight: 700; letter-spacing: .3px;
+      }}
+      .subtitle {{
+        margin: 0 0 20px; font-size: 14px; color: var(--muted);
+      }}
+      .player {{ display: grid; gap: 16px; }}
+      .stage {{
+        border-radius: 12px; overflow: hidden; background: #000;
+        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 18px 36px rgba(0,0,0,0.35);
+      }}
+      video {{ width: 100%; height: auto; display: block; background: #000; }}
+      .actions {{ display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }}
+      .btn {{
+        padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(255,255,255,0.04); color: var(--text); cursor: pointer;
+        transition: transform .08s ease, background .2s ease, border-color .2s ease;
+      }}
+      .btn:hover {{ transform: translateY(-1px); background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.18); }}
+      .link {{ text-decoration: none; color: inherit; }}
+      .hint {{ font-size: 12px; color: var(--muted); margin-top: 8px; }}
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1 class="title">{display_title}</h1>
+      <p class="subtitle">扫码直达 · 简洁观看页</p>
+      <section class="player">
+        <div class="stage">
+          <video controls preload="metadata" playsinline src="{video_url}"></video>
+        </div>
+        <div class="actions">
+          <a class="btn link" href="{video_url}" download>下载视频</a>
+          <button class="btn" id="copyLink">复制观看链接</button>
+        </div>
+        <p class="hint">如无法自动播放，请点击播放按钮；iOS/Android 建议竖屏全屏播放。</p>
+      </section>
+    </main>
+    <script>
+      (function() {{
+        const btn = document.getElementById('copyLink');
+        if (btn && navigator.clipboard) {{
+          btn.addEventListener('click', async () => {{
+            try {{
+              await navigator.clipboard.writeText('{video_url}');
+              btn.textContent = '已复制';
+              setTimeout(() => (btn.textContent = '复制观看链接'), 1500);
+            }} catch (e) {{
+              btn.textContent = '复制失败';
+              setTimeout(() => (btn.textContent = '复制观看链接'), 1500);
+            }}
+          }});
+        }}
+      }})();
+    </script>
+  </body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
 @app.post("/api/tasks/yolo-json-to-txt")
 async def api_yolo_json_to_txt(
     classes: str = Form(...),
