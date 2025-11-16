@@ -275,13 +275,21 @@ async def api_url_to_mp4(video_url: str = Form(...)):
     if not downloads_dir.exists():
         raise HTTPException(status_code=500, detail="未生成下载文件")
 
-    zip_path = job_dir / "downloads.zip"
-    make_zip(downloads_dir, zip_path)
+    # 收集下载结果文件，优先返回视频文件，避免前端再额外解压压缩包。
+    files = list(iter_files(downloads_dir))
+    if not files:
+        raise HTTPException(status_code=500, detail="未检测到任何下载文件")
+
+    # 尝试筛选常见视频格式，若未命中则退回全部文件
+    video_exts = {".mp4", ".m4v", ".mov", ".webm"}
+    video_files = [path for path in files if path.suffix.lower() in video_exts]
+    target_files = video_files or files
+
     return {
         "message": "下载任务完成",
         "job_id": job_id,
-        "archive": build_file_url(zip_path),
-        "files": [build_file_url(path) for path in iter_files(downloads_dir)],
+        "files": [build_file_url(path) for path in target_files],
+        "total_files": len(target_files),
     }
 
 

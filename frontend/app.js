@@ -1317,9 +1317,9 @@ const MODULES = [
   {
     id: "url-to-mp4",
     name: "在线视频下载",
-    summary: "支持 YouTube 与 bilibili 链接下载。",
+    summary: "支持 YouTube、bilibili 及其他由 yt-dlp 支持的视频链接下载（尝试兼容咪咕等国内平台）。",
     description:
-      "调用 `URL2mp4.py`，输入视频链接后将自动下载最佳质量的 mp4 文件。",
+      "调用 `URL2mp4.py`，输入视频链接后将自动下载最佳质量的 mp4 文件。实际可支持站点范围取决于后端使用的 yt-dlp 版本，对咪咕等平台为“尽力支持”，如检测到 Unsupported URL 或需登录/DRM，下载会失败。",
     endpoint: "/api/tasks/url-to-mp4",
     tags: [
       { id: "media", label: "视频" },
@@ -1890,12 +1890,41 @@ const renderResult = (form, module, payload) => {
 
   if (actionsEl) {
     const actionItems = [];
+    // 通用：如果后端提供压缩包，则优先给出“下载压缩包”入口
     if (typeof payload.archive === "string" && payload.archive.trim() !== "") {
       const archiveUrl = resolveFileUrl(payload.archive);
       actionItems.push(
         `<a class="button" href="${archiveUrl}" target="_blank" rel="noopener noreferrer">下载压缩包</a>`
       );
     }
+
+    // 特例：在线视频下载模块（url-to-mp4）不再返回压缩包，直接提供视频文件下载入口
+    if (
+      module.id === "url-to-mp4" &&
+      Array.isArray(payload.files) &&
+      payload.files.length > 0
+    ) {
+      const firstFile = payload.files[0];
+      if (typeof firstFile === "string" && firstFile.trim() !== "") {
+        const videoUrl = resolveFileUrl(firstFile);
+        actionItems.push(
+          `<a class="button" href="${videoUrl}" target="_blank" rel="noopener noreferrer" download>下载视频</a>`
+        );
+      }
+    }
+
+    // 兜底：如果没有压缩包按钮，但返回了文件列表，则提供一个“直接下载”按钮
+    if (actionItems.length === 0 && Array.isArray(payload.files) && payload.files.length > 0) {
+      const firstFile = payload.files[0];
+      if (typeof firstFile === "string" && firstFile.trim() !== "") {
+        const fileUrl = resolveFileUrl(firstFile);
+        const label = module.tags.some((tag) => tag.id === "media") ? "下载文件" : "下载结果";
+        actionItems.push(
+          `<a class="button" href="${fileUrl}" target="_blank" rel="noopener noreferrer" download>${label}</a>`
+        );
+      }
+    }
+
     actionsEl.innerHTML =
       actionItems.length > 0 ? actionItems.join(" ") : '<span class="result__empty">暂无可下载内容</span>';
   }
@@ -1984,7 +2013,7 @@ const renderResult = (form, module, payload) => {
           }
           const fullUrl = resolveFileUrl(fileUrl);
           const label = fileUrl.split("/").pop() || `文件 ${index + 1}`;
-          return `<li class="result__file-item"><a href="${fullUrl}" target="_blank" rel="noopener noreferrer">${label}</a></li>`;
+          return `<li class="result__file-item"><a href="${fullUrl}" target="_blank" rel="noopener noreferrer" download="${label}">${label}</a></li>`;
         })
         .filter(Boolean)
         .join("");
