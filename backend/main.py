@@ -9,7 +9,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import quote, unquote
 
@@ -36,6 +36,10 @@ try:
     from scripts.mp42mov import convert_to_live_photo  # noqa: E402
 except ModuleNotFoundError:
     convert_to_live_photo = None
+try:
+    from scripts.mp42gif import mp4_to_gif as convert_mp4_to_gif  # noqa: E402
+except ModuleNotFoundError:
+    convert_mp4_to_gif = None
 from scripts.scan import (  # noqa: E402
     get_my_ip,
     get_network_range,
@@ -75,6 +79,28 @@ app.mount("/files", StaticFiles(directory=STORAGE_DIR), name="files")
 def health_check() -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
+
+@app.get("/api/download")
+def api_download(path: str):
+    """
+    以“附件下载”方式返回存储目录下的文件，避免浏览器直接在线预览。
+    仅允许以 /files/ 开头的路径。
+    """
+    try:
+        cleaned = (path or "").strip()
+        if not cleaned.startswith("/files/"):
+            raise ValueError("非法文件路径")
+        rel = cleaned[len("/files/") :]
+        file_path = STORAGE_DIR / rel
+        if not file_path.exists() or not file_path.is_file():
+            raise FileNotFoundError("文件不存在")
+        return FileResponse(
+            path=file_path,
+            filename=file_path.name,
+            media_type="application/octet-stream",
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.post("/api/tasks/extract-frames")
 async def api_extract_frames(
@@ -120,6 +146,62 @@ async def api_extract_frames(
         "files": files_urls,
         "total_files": len(files_urls),
         "previews": previews,
+    }
+
+
+@app.post("/api/tasks/mp4-to-gif")
+async def api_mp4_to_gif(
+    video: UploadFile = File(...),
+    start_sec: Optional[float] = Form(None),
+    end_sec: Optional[float] = Form(None),
+    color_depth: Optional[int] = Form(None),
+):
+    if convert_mp4_to_gif is None:
+        raise HTTPException(status_code=503, detail="GIF 转换功能暂时不可用，请稍后重试")
+
+    job_id, job_dir = create_job_dir("mp4-to-gif")
+    video_path = job_dir / video.filename
+    save_upload_file(video, video_path)
+
+    # 输出 GIF 文件名采用源视频名
+    output_path = job_dir / f"{video_path.stem}.gif"
+
+    # 归一化参数
+    start = float(start_sec) if start_sec is not None else 0.0
+    fps = None  # 保持源视频帧率
+    colors = int(color_depth) if color_depth is not None else 256
+
+    # mp4_to_gif 需要数值型 end_time；若未提供，则读取视频时长
+    if end_sec is None:
+        try:
+            from moviepy import VideoFileClip as _VideoFileClip  # type: ignore
+            clip = _VideoFileClip(str(video_path))
+            end = float(clip.duration or 0.0)
+            clip.close()
+        except Exception:
+            end = start  # 兜底：避免 None 传入
+    else:
+        end = float(end_sec)
+
+    try:
+        convert_mp4_to_gif(
+            input_path=str(video_path),
+            output_path=str(output_path),
+            start_time=start,
+            end_time=end,
+            fps=fps,
+            color_depth=colors,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    file_url = build_file_url(output_path)
+    return {
+        "message": "GIF 生成完成",
+        "job_id": job_id,
+        "files": [file_url],
+        "previews": [file_url],
+        "total_files": 1,
     }
 
 
@@ -275,21 +357,13 @@ async def api_url_to_mp4(video_url: str = Form(...)):
     if not downloads_dir.exists():
         raise HTTPException(status_code=500, detail="未生成下载文件")
 
-    # 收集下载结果文件，优先返回视频文件，避免前端再额外解压压缩包。
-    files = list(iter_files(downloads_dir))
-    if not files:
-        raise HTTPException(status_code=500, detail="未检测到任何下载文件")
-
-    # 尝试筛选常见视频格式，若未命中则退回全部文件
-    video_exts = {".mp4", ".m4v", ".mov", ".webm"}
-    video_files = [path for path in files if path.suffix.lower() in video_exts]
-    target_files = video_files or files
-
+    zip_path = job_dir / "downloads.zip"
+    make_zip(downloads_dir, zip_path)
     return {
         "message": "下载任务完成",
         "job_id": job_id,
-        "files": [build_file_url(path) for path in target_files],
-        "total_files": len(target_files),
+        "archive": build_file_url(zip_path),
+        "files": [build_file_url(path) for path in iter_files(downloads_dir)],
     }
 
 

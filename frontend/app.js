@@ -627,7 +627,9 @@ const renderExtractFramesFields = (module) => {
         </div>
       </div>
     </div>
-    <div class="form__group">
+    ${
+      fpsField
+        ? `<div class="form__group">
       <label class="form__label" for="extract-fps-input">${fpsField?.label ?? "抽帧帧率"}<sup>*</sup></label>
       <div class="fps-control">
         <input
@@ -660,7 +662,9 @@ const renderExtractFramesFields = (module) => {
           ? `<p class="form__hint">${fpsField.description}</p>`
           : ""
       }
-    </div>
+    </div>`
+        : ""
+    }
   `;
 };
 
@@ -801,9 +805,7 @@ const setupExtractFramesForm = (form) => {
     !toolbarSection ||
     !(seek instanceof HTMLInputElement) ||
     !(startInput instanceof HTMLInputElement) ||
-    !(endInput instanceof HTMLInputElement) ||
-    !(fpsRange instanceof HTMLInputElement) ||
-    !(fpsInput instanceof HTMLInputElement)
+    !(endInput instanceof HTMLInputElement)
   ) {
     return;
   }
@@ -970,6 +972,9 @@ const setupExtractFramesForm = (form) => {
   };
 
   const syncFpsValue = (rawValue) => {
+    if (!(fpsRange instanceof HTMLInputElement) || !(fpsInput instanceof HTMLInputElement)) {
+      return;
+    }
     const min = Number(fpsRange.min) || 1;
     const max = Number(fpsRange.max) || 60;
     let value = Number.parseInt(String(rawValue), 10);
@@ -1011,9 +1016,13 @@ const setupExtractFramesForm = (form) => {
     endButton.addEventListener("click", setEndFromCurrent);
   }
 
-  fpsRange.addEventListener("input", () => syncFpsValue(fpsRange.value));
-  fpsInput.addEventListener("change", () => syncFpsValue(fpsInput.value));
-  fpsInput.addEventListener("blur", () => syncFpsValue(fpsInput.value));
+  if (fpsRange instanceof HTMLInputElement) {
+    fpsRange.addEventListener("input", () => syncFpsValue(fpsRange.value));
+  }
+  if (fpsInput instanceof HTMLInputElement) {
+    fpsInput.addEventListener("change", () => syncFpsValue(fpsInput.value));
+    fpsInput.addEventListener("blur", () => syncFpsValue(fpsInput.value));
+  }
 
   form.addEventListener("reset", () => {
     revokeObjectUrl();
@@ -1022,14 +1031,16 @@ const setupExtractFramesForm = (form) => {
     video.load();
     seek.value = "0";
     seek.disabled = true;
-    fpsRange.value = "5";
-    fpsInput.value = "5";
+    if (fpsRange instanceof HTMLInputElement) fpsRange.value = "5";
+    if (fpsInput instanceof HTMLInputElement) fpsInput.value = "5";
     currentDisplay && (currentDisplay.textContent = "00.00s");
     durationDisplay && (durationDisplay.textContent = "--");
     resetSelections();
   });
 
-  syncFpsValue(fpsInput.value);
+  if (fpsInput instanceof HTMLInputElement) {
+    syncFpsValue(fpsInput.value);
+  }
   resetSelections();
   togglePreview(false);
 };
@@ -1048,6 +1059,28 @@ const resolveFileUrl = (path) => {
   } catch (_error) {
     return path;
   }
+};
+
+/**
+ * 构造强制下载地址（后端以附件形式返回），避免浏览器内联预览。
+ * @param {string} path /files/... 形式或绝对 URL
+ * @returns {string}
+ */
+const buildDownloadUrl = (path) => {
+  if (typeof path !== "string" || path.trim() === "") {
+    return path;
+  }
+  let filesPath = "";
+  try {
+    const u = new URL(path, BACKEND_BASE_URL);
+    const pn = u.pathname || "";
+    filesPath = pn.includes("/files/") ? pn.slice(pn.indexOf("/files/")) : pn;
+  } catch (_e) {
+    filesPath = path;
+  }
+  const url = new URL("/api/download", BACKEND_BASE_URL);
+  url.searchParams.set("path", filesPath);
+  return url.toString();
 };
 
 /**
@@ -1146,6 +1179,48 @@ const MODULES = [
         "长视频抽帧请合理设置时间段，避免生成过多图片。",
         "如需保证时间戳，请确保上传的视频 FPS 信息正确。",
         "输出目录名仅支持英文字母、数字和下划线。"
+      ]
+    }
+  },
+  {
+    id: "mp4-to-gif",
+    name: "MP4 转 GIF",
+    summary: "截取视频片段并导出为 GIF 动图。",
+    description:
+      "上传 MP4/MOV 等常见视频格式，设置起止时间与目标帧率，后台将调用 `mp42gif.py` 输出 GIF 文件。",
+    endpoint: "/api/tasks/mp4-to-gif",
+    tags: [
+      { id: "media", label: "视频处理" },
+      { id: "tool", label: "格式转换" }
+    ],
+    fields: [
+      {
+        id: "video",
+        type: "file",
+        label: "视频文件",
+        accept: "video/*",
+        required: true,
+        description: "支持 mp4、mov 等常见格式。"
+      },
+      {
+        id: "start_sec",
+        type: "number",
+        label: "起始时间（秒）",
+        placeholder: "例如 0",
+        description: "默认为 0，建议小于结束时间。"
+      },
+      {
+        id: "end_sec",
+        type: "number",
+        label: "结束时间（秒）",
+        placeholder: "留空表示处理到视频末尾"
+      }
+    ],
+    guide: {
+      title: "导出建议",
+      tips: [
+        "GIF 文件体积与时长、分辨率相关；本模块保持源视频帧率导出。",
+        "若需更小文件，可在导出后使用压缩工具进一步处理。"
       ]
     }
   },
@@ -1709,7 +1784,7 @@ const renderModule = (moduleId) => {
   }
 
   const fields =
-    target.id === "extract-frames"
+    target.id === "extract-frames" || target.id === "mp4-to-gif"
       ? renderExtractFramesFields(target)
       : target.id === "qrcode-generator"
         ? renderQrcodeFields(target)
@@ -1769,7 +1844,7 @@ const renderModule = (moduleId) => {
     </section>
   `);
 
-  if (target.id === "extract-frames") {
+  if (target.id === "extract-frames" || target.id === "mp4-to-gif") {
     const formEl = document.querySelector(`[data-module-form="${target.id}"]`);
     setupExtractFramesForm(formEl);
   } else if (target.id === "qrcode-generator") {
@@ -1892,9 +1967,9 @@ const renderResult = (form, module, payload) => {
     const actionItems = [];
     // 通用：如果后端提供压缩包，则优先给出“下载压缩包”入口
     if (typeof payload.archive === "string" && payload.archive.trim() !== "") {
-      const archiveUrl = resolveFileUrl(payload.archive);
+      const archiveUrl = buildDownloadUrl(payload.archive);
       actionItems.push(
-        `<a class="button" href="${archiveUrl}" target="_blank" rel="noopener noreferrer">下载压缩包</a>`
+        `<a class="button" href="${archiveUrl}">下载压缩包</a>`
       );
     }
 
@@ -1906,9 +1981,9 @@ const renderResult = (form, module, payload) => {
     ) {
       const firstFile = payload.files[0];
       if (typeof firstFile === "string" && firstFile.trim() !== "") {
-        const videoUrl = resolveFileUrl(firstFile);
+        const videoUrl = buildDownloadUrl(firstFile);
         actionItems.push(
-          `<a class="button" href="${videoUrl}" target="_blank" rel="noopener noreferrer" download>下载视频</a>`
+          `<a class="button" href="${videoUrl}">下载视频</a>`
         );
       }
     }
@@ -1917,10 +1992,10 @@ const renderResult = (form, module, payload) => {
     if (actionItems.length === 0 && Array.isArray(payload.files) && payload.files.length > 0) {
       const firstFile = payload.files[0];
       if (typeof firstFile === "string" && firstFile.trim() !== "") {
-        const fileUrl = resolveFileUrl(firstFile);
+        const fileUrl = buildDownloadUrl(firstFile);
         const label = module.tags.some((tag) => tag.id === "media") ? "下载文件" : "下载结果";
         actionItems.push(
-          `<a class="button" href="${fileUrl}" target="_blank" rel="noopener noreferrer" download>${label}</a>`
+          `<a class="button" href="${fileUrl}">${label}</a>`
         );
       }
     }
@@ -1973,6 +2048,7 @@ const renderResult = (form, module, payload) => {
             return "";
           }
           const fullUrl = resolveFileUrl(previewUrl);
+          const downloadUrl = buildDownloadUrl(previewUrl);
           const filename = previewUrl.split("/").pop() || `file-${index + 1}`;
           return `
             <figure class="preview-grid__item">
@@ -1986,7 +2062,7 @@ const renderResult = (form, module, payload) => {
               </button>
               <figcaption class="preview-grid__caption">
                 <span class="preview-grid__label">预览 ${index + 1}</span>
-                <a class="preview-grid__download" href="${fullUrl}" download="${filename}">下载</a>
+                <a class="preview-grid__download" href="${downloadUrl}" download="${filename}">下载</a>
               </figcaption>
             </figure>
           `;
@@ -2011,9 +2087,9 @@ const renderResult = (form, module, payload) => {
           if (typeof fileUrl !== "string") {
             return "";
           }
-          const fullUrl = resolveFileUrl(fileUrl);
+          const fullUrl = buildDownloadUrl(fileUrl);
           const label = fileUrl.split("/").pop() || `文件 ${index + 1}`;
-          return `<li class="result__file-item"><a href="${fullUrl}" target="_blank" rel="noopener noreferrer" download="${label}">${label}</a></li>`;
+          return `<li class="result__file-item"><a href="${fullUrl}" download="${label}">${label}</a></li>`;
         })
         .filter(Boolean)
         .join("");
