@@ -9,7 +9,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import quote, unquote
 
@@ -99,6 +99,106 @@ def api_download(path: str):
             filename=file_path.name,
             media_type="application/octet-stream",
         )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.get("/gif")
+def gif_view_page(request: Request, file: str, title: Optional[str] = None) -> HTMLResponse:
+    """
+    微信友好：GIF 预览页。用于手机端长按保存/添加表情，或桌面端直接查看。
+    参数 `file` 形如 /files/.../xxx.gif
+    """
+    try:
+        cleaned = (file or "").strip()
+        if not cleaned.startswith("/files/"):
+            raise ValueError("非法文件路径")
+        rel = cleaned[len("/files/") :]
+        gif_path = STORAGE_DIR / rel
+        if not gif_path.exists() or not gif_path.is_file():
+            raise FileNotFoundError("GIF 文件不存在")
+        if gif_path.suffix.lower() != ".gif":
+            raise ValueError("仅支持 .gif 文件")
+    except Exception as exc:  # noqa: BLE001
+        return HTMLResponse(
+            content=f"<h1>无法显示</h1><p>{str(exc)}</p>",
+            status_code=404,
+        )
+
+    base_url = str(request.base_url).rstrip("/")
+    gif_url = f"{base_url}{cleaned}"
+    display_title = (title or gif_path.stem).strip() or "GIF 预览"
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{display_title}</title>
+    <meta name="theme-color" content="#111827" />
+    <style>
+      :root {{
+        --bg: #0f172a;
+        --card: #111827;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+      }}
+      * {{ box-sizing: border-box; }}
+      html, body {{ height: 100%; }}
+      body {{
+        margin: 0; background: linear-gradient(135deg, var(--bg), #0b1225);
+        color: var(--text); font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial;
+        display: grid; place-items: center; padding: 24px;
+      }}
+      .card {{
+        width: min(680px, 100%);
+        background: var(--card);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 16px;
+        padding: 20px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+      }}
+      .title {{ margin: 0 0 8px; font-size: 20px; font-weight: 700; }}
+      .subtitle {{ margin: 0 0 14px; font-size: 13px; color: var(--muted); }}
+      .stage {{ display: grid; place-items: center; background: #000; border-radius: 12px; overflow: hidden; }}
+      .stage img {{ width: 100%; height: auto; display: block; image-rendering: -webkit-optimize-contrast; }}
+      .hint {{ font-size: 12px; color: var(--muted); margin-top: 8px; }}
+      .actions {{ display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }}
+      .btn {{ padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.04); color: var(--text); text-decoration: none; }}
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1 class="title">{display_title}</h1>
+      <p class="subtitle">长按图片可保存/添加到表情（微信内打开更友好）</p>
+      <div class="stage">
+        <img src="{gif_url}" alt="{display_title}" />
+      </div>
+      <div class="actions">
+        <a class="btn" href="{gif_url}" download>下载 GIF</a>
+      </div>
+      <p class="hint">如在微信中打开：长按图片 → 保存图片/添加到表情。</p>
+    </main>
+  </body>
+</html>"""
+    return HTMLResponse(content=html)
+
+@app.get("/api/utils/qrcode")
+def api_utils_qrcode(url: str):
+    """
+    输入任意 URL，返回二维码 PNG（StreamingResponse）。
+    用于“手机扫码打开 GIF 页”，便于长按保存/添加表情。
+    """
+    try:
+        cleaned = (url or "").strip()
+        if not cleaned:
+            raise ValueError("请输入有效的 URL")
+        import qrcode  # type: ignore
+        img = qrcode.make(cleaned)
+        import io
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return StreamingResponse(buf, media_type="image/png")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

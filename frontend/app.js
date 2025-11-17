@@ -1078,6 +1078,28 @@ const buildDownloadUrl = (path) => {
 };
 
 /**
+ * 构造 GIF 友好预览页地址（用于微信内打开/扫码）。
+ * @param {string} path /files/... 形式或绝对 URL
+ * @returns {string}
+ */
+const buildGifViewUrl = (path) => {
+  if (typeof path !== "string" || path.trim() === "") {
+    return path;
+  }
+  let filesPath = "";
+  try {
+    const u = new URL(path, BACKEND_BASE_URL);
+    const pn = u.pathname || "";
+    filesPath = pn.includes("/files/") ? pn.slice(pn.indexOf("/files/")) : pn;
+  } catch (_e) {
+    filesPath = path;
+  }
+  const url = new URL("/gif", BACKEND_BASE_URL);
+  url.searchParams.set("file", filesPath);
+  return url.toString();
+};
+
+/**
  * @typedef {Object} ModuleTag
  * @property {string} id 唯一标识
  * @property {string} label 展示文本
@@ -2000,9 +2022,12 @@ const renderResult = (form, module, payload) => {
       if (typeof first === "string" && first.trim() !== "") {
         const viewUrl = resolveFileUrl(first);
         const downloadUrl = buildDownloadUrl(first);
+        const wechatUrl = buildGifViewUrl(first);
+        const qrUrl = `${BACKEND_BASE_URL}/api/utils/qrcode?url=${encodeURIComponent(wechatUrl)}`;
         actionItems.push(
           `<a class="button" href="${downloadUrl}">下载 GIF</a>`,
-          `<button class="button" type="button" data-copy-gif data-src="${viewUrl}">复制 GIF</button>`
+          `<button class="button" type="button" data-copy-gif data-src="${viewUrl}">复制 GIF</button>`,
+          `<a class="button" href="${qrUrl}" target="_blank" rel="noopener noreferrer">微信二维码</a>`
         );
       }
     }
