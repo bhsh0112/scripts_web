@@ -45,6 +45,7 @@ from scripts.scan import (  # noqa: E402
     get_network_range,
     scan_network,
     scan_lan_devices,
+    scan_devices_in_ranges,
 )
 from scripts.URL2mp4 import download_youtube_video  # noqa: E402
 from scripts.yolo.json_to_yolo import decode_json  # noqa: E402
@@ -376,12 +377,24 @@ async def api_mp4_to_live_photo(
 
 
 @app.post("/api/tasks/network-scan")
-async def api_network_scan(placeholder: Optional[str] = Form(None)):
+async def api_network_scan(network_range: str = Form(...)):
     """
-    局域网扫描：忽略入参，自动识别本机所有活跃网段并扫描。
-    返回按类型分组的设备信息，同时保留 devices 扁平列表（向后兼容）。
+    局域网扫描：仅扫描用户显式提供的网段（CIDR），不再尝试自动识别本机网段。
+    - 支持以逗号/空白分隔的多个 CIDR，例如： "192.168.1.0/24, 10.0.0.0/24"
+    - 返回按类型分组的设备信息，同时保留 devices 扁平列表（向后兼容）。
     """
-    result = scan_lan_devices()
+    try:
+        cleaned = (network_range or "").strip()
+        if not cleaned:
+            raise ValueError("请输入扫描网段（CIDR），例如 192.168.1.0/24")
+        # 拆分多个网段，支持逗号与空白
+        parts = [p for p in (cleaned.replace(",", " ").split()) if p]
+        if not parts:
+            raise ValueError("请输入有效的 CIDR 网段，例如 192.168.1.0/24")
+        result = scan_devices_in_ranges(parts)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     devices = result.get("devices", [])
     networks = result.get("networks", [])
     groups = result.get("groups", {})
@@ -416,7 +429,7 @@ async def api_network_scan(placeholder: Optional[str] = Form(None)):
         )
 
     return {
-        "message": f"扫描完成，发现 {len(devices)} 台设备（{', '.join(networks) or '未知网段'}）",
+        "message": f"扫描完成，发现 {len(devices)} 台设备（{', '.join(networks) or '无效网段'}）",
         "networks": networks,
         "devices": devices,  # 保留：[{ip, mac, hostname?, open_ports?, category?, name?}]
         "groups": grouped,   # 新增：分组输出

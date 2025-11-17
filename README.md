@@ -81,35 +81,21 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 - 上传文件、解压后的原始数据、处理结果以及生成的压缩包均保存在该目录。
 - 清理策略：默认不自动清除，请定期手动删除历史作业目录或编写计划任务。
 
-## 本地局域网扫描助手（推荐）
+## 局域网扫描使用说明
 
-出于浏览器安全限制，网页无法直接对用户设备所在局域网执行 ARP/端口探测。因此平台新增了“本地扫描助手”，让扫描在用户本机进行，结果直接回传给前端展示；若未运行助手，则回退为在服务器侧扫描（即扫描服务器所在局域网）。
+当前版本不再尝试自动识别或访问“用户所在的网段”。请在前端“局域网设备扫描”模块中手动填写需要扫描的网段（CIDR），例如：
 
-### 启动本地扫描助手
-
-```bash
-cd /Volumes/KIOXIA/Scripts/web
-python -m venv .venv
-source .venv/bin/activate   # Windows 使用 .\.venv\Scripts\activate
-pip install --upgrade pip
-pip install -r backend/requirements.txt
-
-# 推荐以模块方式运行（可避免相对导入问题）；ARP 多数系统需要管理员权限
-sudo -E python -m scripts.local_scanner_server
-# 服务器默认监听 http://127.0.0.1:47832
+```
+192.168.1.0/24
 ```
 
-- 前端在提交“局域网设备扫描”时，会优先尝试请求 `http://127.0.0.1:47832/scan`；
-- 如果无法连接本地助手，则自动回退调用后端 `/api/tasks/network-scan`（扫描服务器所在网段）；
-- `scapy` 在不同系统上可能需要管理员/root 权限或额外授权（macOS 会弹出本地网络访问授权）。
+也可以一次填写多个网段，使用逗号或空格分隔：
 
-若仍提示“未检测到本地扫描助手”，请排查：
+```
+192.168.1.0/24, 10.0.0.0/24
+```
 
-- 本机是否已成功启动：访问 `http://127.0.0.1:47832/health` 应返回 `{"status":"ok"}`；
-- 启动命令是否使用了 `python -m scripts.local_scanner_server`；
-- 浏览器是否通过 `http` 打开前端（若是 `https` 页面，跨域访问 `http://127.0.0.1` 可能被拦截为混合内容）；
-- macOS “系统设置 → 隐私与安全性 → 本地网络”是否允许 Python/终端访问本地网络；
-- 如无管理员权限，ARP 探测可能失败，建议以 `sudo` 运行。
+注意：ARP 扫描在某些系统上可能需要管理员/root 权限或额外授权。
 
 ## 前端站点
 
@@ -149,7 +135,7 @@ python -m http.server 4173
 | `/api/tasks/extract-frames` | `video`、`n_fps`、`start_sec`、`end_sec` | `message`、`job_id`、`archive`、`previews`、`files` |
 | `/api/tasks/images-download` | `page_url`、`save_path` | `archive`、`files` |
 | `/api/tasks/mp4-to-live-photo` | `video`、`output_prefix`、`duration`、`keyframe_time` | `files` (`.mov`/`.jpg`) |
-| `/api/tasks/network-scan` | `network_range`（可选） | `devices`（列表，含 IP、MAC 等） |
+| `/api/tasks/network-scan` | `network_range`（必填） | `devices`（列表，含 IP、MAC 等） |
 | `/api/tasks/folder-split` | `source_dir`、`file_extension`、`num_folders` | `source_dir` |
 | `/api/tasks/url-to-mp4` | `video_url` | `archive`、`files` |
 | `/api/tasks/url-to-qrcode` | `target_url` | `files`、`previews` |

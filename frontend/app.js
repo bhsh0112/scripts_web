@@ -1353,21 +1353,29 @@ const MODULES = [
   {
     id: "network-scan",
     name: "局域网设备扫描",
-    summary: "快速查看当前网段在线设备列表。",
+    summary: "按指定网段（CIDR）扫描在线设备。",
     description:
-      "优先通过“本地扫描助手”在用户设备侧进行 ARP 扫描，自动识别活跃网段；未检测到助手时回退服务器侧扫描。",
+      "请输入要扫描的局域网网段（CIDR），例如 192.168.1.0/24。本功能仅根据用户输入的网段执行扫描，不再尝试自动识别或访问“用户所在的网段”。",
     endpoint: "/api/tasks/network-scan",
     tags: [
       { id: "network", label: "网络" },
       { id: "scapy", label: "Scapy" }
     ],
-    fields: [],
+    fields: [
+      {
+        id: "network_range",
+        type: "text",
+        label: "扫描网段（CIDR）",
+        placeholder: "如 192.168.1.0/24 或 10.0.0.0/24",
+        required: true,
+        description: "可输入多个网段，使用逗号或空格分隔；仅扫描你填写的网段。"
+      }
+    ],
     guide: {
       title: "安全提示",
       tips: [
         "仅在授权的内网环境中使用，避免对他人网络造成干扰。",
-        "部分设备可能关闭 ARP 响应，如需更全列表可多次扫描。",
-        "要扫描“用户所在局域网”，请先在本机运行：python -m scripts.local_scanner_server（必要时加 sudo，默认端口 47832）。"
+        "部分设备可能关闭 ARP 响应，如需更全列表可多次扫描。"
       ]
     }
   },
@@ -1814,23 +1822,6 @@ const renderModule = (moduleId) => {
         ? renderQrcodeFields(target)
         : target.fields.map(renderField).join("");
 
-  const localHelper =
-    target.id === "network-scan"
-      ? `
-      <aside class="helper helper--local-scanner">
-        <h3 class="helper__title">本地扫描助手</h3>
-        <p class="helper__desc">
-          为确保扫描“用户所在局域网”，需在本机启动本地扫描助手。
-          你可以一键检测助手状态、复制运行命令，或下载启动脚本。
-        </p>
-        <div class="helper__actions">
-          <button class="button" type="button" data-check-local-scanner>检测助手状态</button>
-          <button class="button" type="button" data-copy-local-command>复制运行命令</button>
-          <button class="button button--ghost" type="button" data-download-local-script>下载启动脚本</button>
-        </div>
-        <p class="helper__meta">默认监听：<code>${getLocalScannerBaseUrl()}</code></p>
-      </aside>`
-      : "";
   render(`
     ${renderBreadcrumbs(target)}
     <section class="module-detail">
@@ -1842,7 +1833,6 @@ const renderModule = (moduleId) => {
       <div class="module-detail__body">
         <form class="form form-card" data-module-form="${target.id}" autocomplete="off">
           ${fields}
-          ${localHelper}
           <div class="form__actions">
             <button class="button" type="submit">提交任务</button>
             <button class="button button--ghost" type="button" data-link="home">取消</button>
@@ -2212,39 +2202,6 @@ const handleSubmit = async (event) => {
   updateStatus(form, "info", "任务提交中...", "请稍候，正在处理");
 
   try {
-    // 特例：局域网设备扫描优先尝试本地扫描助手
-    if (module.id === "network-scan") {
-      /**
-       * 使用 fetch+超时尝试访问本地扫描助手。
-       * @param {string} url 目标 URL
-       * @param {number} timeoutMs 超时时间（毫秒）
-       * @returns {Promise<Response>}
-       */
-      const fetchWithTimeout = (url, timeoutMs = 4000) => {
-        const controller = new AbortController();
-        const id = setTimeout(() => controller.abort(), timeoutMs);
-        return fetch(url, { method: "GET", signal: controller.signal })
-          .finally(() => clearTimeout(id));
-      };
-
-      try {
-        updateStatus(form, "info", "尝试在本机扫描...", "本地扫描进行中，预计 5-20 秒");
-        const localUrl = `${getLocalScannerBaseUrl()}/scan?fast=1`;
-        const res = await fetchWithTimeout(localUrl, 20000);
-        if (res.ok) {
-          const payload = await res.json();
-          updateStatus(form, "success", "本地扫描完成", `共发现 ${Array.isArray(payload.devices) ? payload.devices.length : 0} 台设备`);
-          renderResult(form, module, payload);
-          return;
-        }
-        // 非 2xx 状态时，回退服务器扫描
-        updateStatus(form, "info", "未检测到本地扫描助手，改为服务器扫描...", "如需扫描本机局域网，请先运行本地助手");
-      } catch (_err) {
-        // 网络/超时等错误，回退服务器扫描
-        updateStatus(form, "info", "未检测到本地扫描助手，改为服务器扫描...", "如需扫描本机局域网，请先运行本地助手");
-      }
-    }
-
     // 默认：调用后端接口
     {
       const formData = serializeForm(form);

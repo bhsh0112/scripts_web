@@ -210,6 +210,83 @@ def print_devices(devices: List[Dict[str, str]]) -> None:
         print(f"{device['ip']:<20}{device['mac']:<20}")
 
 
+def scan_devices_in_ranges(network_ranges: List[str]) -> Dict[str, object]:
+    """
+    扫描指定的一个或多个网段（CIDR），并返回与 scan_lan_devices 相同结构的结果。
+    仅使用用户显式提供的网段，不再尝试自动识别本机网段。
+    """
+    # 规范化与去重输入的网段
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    for raw in network_ranges:
+        cleaned = (raw or "").strip()
+        if not cleaned:
+            continue
+        try:
+            net = ipaddress.IPv4Network(cleaned, strict=False)
+            # 排除 /32、回环与链路本地
+            if net.prefixlen >= 32:
+                continue
+            if net.network_address.is_loopback or net.network_address.is_link_local:
+                continue
+            cidr = str(net)
+            if cidr not in seen:
+                seen.add(cidr)
+                normalized.append(cidr)
+        except Exception:
+            # 忽略非法输入
+            continue
+
+    devices_enriched: List[Dict[str, object]] = []
+    seen_ips: Set[str] = set()
+    for cidr in normalized:
+        for dev in scan_network(cidr):
+            ip = dev.get("ip")
+            mac = dev.get("mac")
+            if not ip or ip in seen_ips:
+                continue
+            seen_ips.add(ip)
+
+            hostname = _resolve_hostname(ip)
+            open_ports = [p for p in _PORTS_PROFILE if _check_tcp_port(ip, p)]
+            category = _classify_device(hostname, open_ports)
+            name = hostname or ip
+            devices_enriched.append(
+                {
+                    "ip": ip,
+                    "mac": mac,
+                    "hostname": hostname,
+                    "open_ports": open_ports,
+                    "category": category,
+                    "name": name,
+                }
+            )
+
+    groups: Dict[str, List[Dict[str, object]]] = {
+        "camera": [],
+        "computer": [],
+        "printer": [],
+        "network": [],
+        "iot": [],
+        "unknown": [],
+    }
+    for d in devices_enriched:
+        groups.setdefault(d["category"], []).append(d)
+
+    return {
+        "networks": normalized,
+        "devices": devices_enriched,
+        "groups": {
+            "camera": groups.get("camera", []),
+            "computer": groups.get("computer", []),
+            "printer": groups.get("printer", []),
+            "network": groups.get("network", []),
+            "iot": groups.get("iot", []),
+            "unknown": groups.get("unknown", []),
+        },
+    }
+
+
 if __name__ == "__main__":
     result = scan_lan_devices()
     print("Scanned networks:", ", ".join(result.get("networks", [])))
