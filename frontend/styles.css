@@ -950,3 +950,131 @@ body {
   }
 }
 
+/* ========== 响应式增强与桌面双栏布局 ========== */
+
+/* 媒体资源默认自适应容器宽度 */
+img,
+video {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* 显示控制工具类 */
+.only-mobile {
+  display: none;
+}
+.only-desktop {
+  display: initial;
+}
+
+/* 小屏优化（≤480px） */
+@media (max-width: 480px) {
+  .app__title {
+    font-size: 1.8rem;
+  }
+  .app__subtitle {
+    font-size: 0.95rem;
+  }
+  .app__main {
+    width: 94vw;
+    padding: 28px 0 64px;
+  }
+  .module-card {
+    padding: 18px;
+  }
+  .module-card__title {
+    font-size: 1.1rem;
+  }
+  .preview-grid {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+  .only-mobile {
+    display: initial;
+  }
+  .only-desktop {
+    display: none !important;
+  }
+}
+
+/* 中屏布局（≥768px）微调 */
+@media (min-width: 768px) {
+  .app__main {
+    width: min(1100px, 92vw);
+  }
+}
+
+/* 大屏布局（≥1024px）启用双栏表单布局与粘性侧栏 */
+@media (min-width: 1024px) {
+  .app__main {
+    width: min(1200px, 90vw);
+  }
+
+  /* 表单容器作为网格：主表单内容 + 侧栏（如本地扫描助手） */
+  .form-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 24px;
+    align-items: start;
+  }
+
+  /* 侧栏基础样式（仅当存在 .helper 时生效） */
+  .helper {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 20px;
+    box-shadow: var(--shadow-sm);
+  }
+  .helper__title {
+    margin: 0 0 8px;
+    font-size: 1.1rem;
+  }
+  .helper__desc {
+    margin: 0 0 14px;
+    color: var(--text-sub);
+    line-height: 1.6;
+    font-size: 0.95rem;
+  }
+  .helper__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .helper__meta {
+    margin: 0;
+    color: var(--text-sub);
+    font-size: 0.85rem;
+  }
+
+  /* 将助手侧栏放入右侧列，并设置粘性定位 */
+  .helper--local-scanner {
+    grid-column: 2;
+    position: sticky;
+    top: 24px;
+  }
+
+  /* 结果区块横跨两列，便于大屏展示 */
+  [data-result-panel] {
+    grid-column: 1 / -1;
+  }
+
+  /* 其他表单操作与状态仍在左列 */
+  .form__actions,
+  [data-status-panel] {
+    grid-column: 1;
+  }
+}
+
+/* 超大屏（≥1440px）适度放宽容器宽度与卡片密度 */
+@media (min-width: 1440px) {
+  .app__main {
+    width: min(1280px, 86vw);
+  }
+  .module-grid {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 24px;
+  }
+}
+
