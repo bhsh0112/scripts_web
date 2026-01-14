@@ -127,12 +127,35 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 前端站点
 
-前端位于 `frontend/` 目录，可通过任意静态服务器或直接浏览器打开：
+前端位于 `frontend/` 目录。
+
+### 使用 npm（推荐）
+
+前端已支持使用 npm + Vite 进行开发与构建：
+
+```bash
+cd /path/to/scripts_web/frontend
+npm install
+npm run dev
+# 浏览器访问 http://localhost:4173
+```
+
+构建产物（静态文件）：
+
+```bash
+cd /path/to/scripts_web/frontend
+npm run build
+# 输出到 frontend/dist/，可用任意静态服务器托管
+```
+
+### 静态方式（无需 npm）
+
+若你只想直接用静态服务器打开（不经过 Vite 构建），请访问 `index.static.html`：
 
 ```bash
 cd /Volumes/KIOXIA/Scripts/web/frontend
 python -m http.server 4173
-# 浏览器访问 http://localhost:4173
+# 浏览器访问 http://localhost:4173/index.static.html
 ```
 
 ### 后端地址配置
@@ -151,12 +174,15 @@ python -m http.server 4173
    <script>
      window.APP_CONFIG = { backendBaseUrl: "http://your-server:8000" };
    </script>
-   <script type="module" src="./app.js"></script>
+   <!-- Vite 开发模式（frontend/index.html） -->
+   <script type="module" src="/src/main.js"></script>
+   <!-- 静态模式（frontend/index.static.html） -->
+   <!-- <script type="module" src="./app.js"></script> -->
    ```
 
 ## API 接口概览
 
-后端统一采用 `POST /api/tasks/<module>` 形式，部分重要接口如下（字段与说明简写，可在前端源码 `frontend/app.js` 中查看完整表单定义）：
+后端统一采用 `POST /api/tasks/<module>` 形式，部分重要接口如下（字段与说明简写，可在前端源码 `frontend/src/data/modules.js` 中查看完整表单定义；旧版静态入口仍保留 `frontend/app.js`）：
 
 | 接口 | 关键参数 | 成功响应字段 |
 | --- | --- | --- |
