@@ -1044,6 +1044,66 @@ video {
   background: rgba(34, 211, 238, 0.12);
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.25);
   border-radius: 10px;
+  cursor: move;
+}
+
+.video-cropper__handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #22d3ee;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.video-cropper__handle--nw {
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  cursor: nwse-resize;
+}
+.video-cropper__handle--n {
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, -50%);
+  cursor: ns-resize;
+}
+.video-cropper__handle--ne {
+  right: 0;
+  top: 0;
+  transform: translate(50%, -50%);
+  cursor: nesw-resize;
+}
+.video-cropper__handle--e {
+  right: 0;
+  top: 50%;
+  transform: translate(50%, -50%);
+  cursor: ew-resize;
+}
+.video-cropper__handle--se {
+  right: 0;
+  bottom: 0;
+  transform: translate(50%, 50%);
+  cursor: nwse-resize;
+}
+.video-cropper__handle--s {
+  left: 50%;
+  bottom: 0;
+  transform: translate(-50%, 50%);
+  cursor: ns-resize;
+}
+.video-cropper__handle--sw {
+  left: 0;
+  bottom: 0;
+  transform: translate(-50%, 50%);
+  cursor: nesw-resize;
+}
+.video-cropper__handle--w {
+  left: 0;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  cursor: ew-resize;
 }
 
 .video-cropper__panel {

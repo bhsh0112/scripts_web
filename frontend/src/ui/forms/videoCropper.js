@@ -10,6 +10,7 @@
  */
 
 const CROPPER_MOUNT_ATTR = "data-video-cropper-mounted";
+const MIN_DISPLAY_SIZE = 6;
 
 /**
  * @typedef {Object} CropRect
@@ -83,6 +84,99 @@ const normalizeRect = (x1, y1, x2, y2) => {
   const w = Math.abs(x2 - x1);
   const h = Math.abs(y2 - y1);
   return { x, y, w, h };
+};
+
+/**
+ * 生成裁剪框 HTML（包含拖拽手柄）。
+ * @returns {string}
+ */
+const buildRectHtml = () => `
+  <div class="video-cropper__rect" data-crop-rect>
+    <span class="video-cropper__handle video-cropper__handle--nw" data-crop-handle="nw"></span>
+    <span class="video-cropper__handle video-cropper__handle--n" data-crop-handle="n"></span>
+    <span class="video-cropper__handle video-cropper__handle--ne" data-crop-handle="ne"></span>
+    <span class="video-cropper__handle video-cropper__handle--e" data-crop-handle="e"></span>
+    <span class="video-cropper__handle video-cropper__handle--se" data-crop-handle="se"></span>
+    <span class="video-cropper__handle video-cropper__handle--s" data-crop-handle="s"></span>
+    <span class="video-cropper__handle video-cropper__handle--sw" data-crop-handle="sw"></span>
+    <span class="video-cropper__handle video-cropper__handle--w" data-crop-handle="w"></span>
+  </div>
+`;
+
+/**
+ * 保证矩形在舞台范围内。
+ * @param {CropRect} rect
+ * @param {number} stageW
+ * @param {number} stageH
+ * @returns {CropRect}
+ */
+const clampRectToStage = (rect, stageW, stageH) => {
+  const minW = Math.min(MIN_DISPLAY_SIZE, stageW || MIN_DISPLAY_SIZE);
+  const minH = Math.min(MIN_DISPLAY_SIZE, stageH || MIN_DISPLAY_SIZE);
+  let x = rect.x;
+  let y = rect.y;
+  let w = Math.max(minW, rect.w);
+  let h = Math.max(minH, rect.h);
+
+  if (x < 0) x = 0;
+  if (y < 0) y = 0;
+  if (x + w > stageW) x = Math.max(0, stageW - w);
+  if (y + h > stageH) y = Math.max(0, stageH - h);
+  return { x, y, w, h };
+};
+
+/**
+ * 基于手柄方向缩放矩形。
+ * @param {CropRect} rect
+ * @param {string} handle
+ * @param {number} dx
+ * @param {number} dy
+ * @param {number} stageW
+ * @param {number} stageH
+ * @returns {CropRect}
+ */
+const resizeRect = (rect, handle, dx, dy, stageW, stageH) => {
+  let { x, y, w, h } = rect;
+  if (handle.includes("e")) w += dx;
+  if (handle.includes("s")) h += dy;
+  if (handle.includes("w")) {
+    x += dx;
+    w -= dx;
+  }
+  if (handle.includes("n")) {
+    y += dy;
+    h -= dy;
+  }
+
+  if (w < MIN_DISPLAY_SIZE) {
+    if (handle.includes("w")) {
+      x -= MIN_DISPLAY_SIZE - w;
+    }
+    w = MIN_DISPLAY_SIZE;
+  }
+  if (h < MIN_DISPLAY_SIZE) {
+    if (handle.includes("n")) {
+      y -= MIN_DISPLAY_SIZE - h;
+    }
+    h = MIN_DISPLAY_SIZE;
+  }
+
+  if (x < 0) {
+    w += x;
+    x = 0;
+  }
+  if (y < 0) {
+    h += y;
+    y = 0;
+  }
+  if (x + w > stageW) {
+    w = Math.max(MIN_DISPLAY_SIZE, stageW - x);
+  }
+  if (y + h > stageH) {
+    h = Math.max(MIN_DISPLAY_SIZE, stageH - y);
+  }
+
+  return clampRectToStage({ x, y, w, h }, stageW, stageH);
 };
 
 /**
@@ -172,7 +266,7 @@ export const setupVideoCropperForForm = (form) => {
         <div class="video-cropper__stage">
           <video class="video-cropper__video" controls preload="metadata" playsinline></video>
           <div class="video-cropper__overlay" data-crop-overlay>
-            <div class="video-cropper__rect" data-crop-rect></div>
+            ${buildRectHtml()}
           </div>
         </div>
       `;
@@ -190,7 +284,7 @@ export const setupVideoCropperForForm = (form) => {
       const o = document.createElement("div");
       o.className = "video-cropper__overlay";
       o.setAttribute("data-crop-overlay", "");
-      o.innerHTML = `<div class="video-cropper__rect" data-crop-rect></div>`;
+      o.innerHTML = buildRectHtml();
       stage.appendChild(o);
     }
 
@@ -241,7 +335,11 @@ export const setupVideoCropperForForm = (form) => {
   /** @type {CropRect|null} */
   let currentDisplayRect = null;
   let pointerDown = false;
+  let interactionMode = "idle";
   let startPoint = { x: 0, y: 0 };
+  /** @type {CropRect|null} */
+  let startRect = null;
+  let activeHandle = "";
 
   const clearSelection = () => {
     currentDisplayRect = null;
@@ -314,15 +412,57 @@ export const setupVideoCropperForForm = (form) => {
     overlay.hidden = !isEnabled();
     overlay.style.pointerEvents = overlay.hidden ? "none" : "auto";
 
-    overlay.addEventListener("pointerdown", (ev) => {
-      if (!isEnabled()) return;
-      if (!(ev instanceof PointerEvent)) return;
+    /**
+     * 开始交互。
+     * @param {PointerEvent} ev
+     * @param {"draw"|"move"|"resize"} mode
+     * @param {string} handle
+     * @returns {void}
+     */
+    const beginInteraction = (ev, mode, handle = "") => {
+      if (!overlay) return;
       pointerDown = true;
+      interactionMode = mode;
+      activeHandle = handle;
       overlay.setPointerCapture(ev.pointerId);
       const p = getLocalPoint(ev, overlay);
       startPoint = { x: p.x, y: p.y };
-      currentDisplayRect = { x: p.x, y: p.y, w: 0, h: 0 };
-      drawRect();
+      startRect = currentDisplayRect ? { ...currentDisplayRect } : null;
+      if (mode === "draw") {
+        currentDisplayRect = { x: p.x, y: p.y, w: 0, h: 0 };
+        drawRect();
+      }
+    };
+
+    overlay.addEventListener("pointerdown", (ev) => {
+      if (!isEnabled()) return;
+      if (!(ev instanceof PointerEvent)) return;
+      if (ev.target !== overlay) return;
+      beginInteraction(ev, "draw");
+    });
+
+    rectEl.addEventListener("pointerdown", (ev) => {
+      if (!isEnabled()) return;
+      if (!(ev instanceof PointerEvent)) return;
+      if (!currentDisplayRect) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      beginInteraction(ev, "move");
+    });
+
+    const handles = Array.from(rectEl.querySelectorAll("[data-crop-handle]"));
+    handles.forEach((handleEl) => {
+      if (!(handleEl instanceof HTMLElement)) return;
+      handleEl.addEventListener("pointerdown", (ev) => {
+        if (!isEnabled()) return;
+        if (!(ev instanceof PointerEvent)) return;
+        if (!currentDisplayRect) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const dir = handleEl.getAttribute("data-crop-handle") || "";
+        if (!dir) return;
+        beginInteraction(ev, "resize", dir);
+      });
     });
 
     overlay.addEventListener("pointermove", (ev) => {
@@ -330,13 +470,30 @@ export const setupVideoCropperForForm = (form) => {
       if (!pointerDown) return;
       if (!(ev instanceof PointerEvent)) return;
       const p = getLocalPoint(ev, overlay);
-      currentDisplayRect = normalizeRect(startPoint.x, startPoint.y, p.x, p.y);
+      const stageRect = overlay.getBoundingClientRect();
+      if (interactionMode === "draw") {
+        currentDisplayRect = normalizeRect(startPoint.x, startPoint.y, p.x, p.y);
+      } else if (interactionMode === "move" && startRect) {
+        const dx = p.x - startPoint.x;
+        const dy = p.y - startPoint.y;
+        currentDisplayRect = clampRectToStage(
+          { x: startRect.x + dx, y: startRect.y + dy, w: startRect.w, h: startRect.h },
+          stageRect.width,
+          stageRect.height
+        );
+      } else if (interactionMode === "resize" && startRect) {
+        const dx = p.x - startPoint.x;
+        const dy = p.y - startPoint.y;
+        currentDisplayRect = resizeRect(startRect, activeHandle, dx, dy, stageRect.width, stageRect.height);
+      }
       drawRect();
     });
 
     const finish = () => {
       if (!pointerDown) return;
       pointerDown = false;
+      interactionMode = "idle";
+      activeHandle = "";
       if (!currentDisplayRect) return;
       // 过小则视作无效
       if (currentDisplayRect.w < 2 || currentDisplayRect.h < 2) {
