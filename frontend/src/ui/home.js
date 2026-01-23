@@ -1,14 +1,22 @@
-import { MODULES } from "../data/modules.js";
+import { MODULES, VIDEO_PARENT_ID, VIDEO_SUBMODULE_IDS } from "../data/modules.js";
 import { render } from "../app/render.js";
+
+/**
+ * 获取首页展示模块。
+ * @returns {Array<{id:string,name:string,summary:string,tags:Array<{id:string,label:string}>,externalUrl?:string}>}
+ */
+const getHomeModules = () =>
+  MODULES.filter((module) => module.id === VIDEO_PARENT_ID || !VIDEO_SUBMODULE_IDS.includes(module.id));
 
 /**
  * 格式化统计数据。
  * @returns {{total:number,media:number,automation:number}}
  */
 const buildStats = () => {
-  const total = MODULES.length;
-  const media = MODULES.filter((item) => item.tags.some((tag) => tag.id === "media")).length;
-  const automation = MODULES.filter((item) => item.tags.some((tag) => tag.id === "automation")).length;
+  const modules = getHomeModules();
+  const total = modules.length;
+  const media = modules.filter((item) => item.tags.some((tag) => tag.id === "media")).length;
+  const automation = modules.filter((item) => item.tags.some((tag) => tag.id === "automation")).length;
   return { total, media, automation };
 };
 
@@ -18,7 +26,7 @@ const buildStats = () => {
  */
 export const renderHome = () => {
   const { total, media, automation } = buildStats();
-  const cards = MODULES.map(
+  const cards = getHomeModules().map(
     (module) => {
       const isExternalLink = module.externalUrl;
       const actionButton = isExternalLink
