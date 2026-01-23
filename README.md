@@ -137,7 +137,7 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 cd /path/to/scripts_web/frontend
 npm install
 npm run dev
-# 浏览器访问 http://localhost:4173
+# 浏览器访问 http://localhost:5173
 ```
 
 构建产物（静态文件）：
@@ -154,8 +154,8 @@ npm run build
 
 ```bash
 cd /Volumes/KIOXIA/Scripts/web/frontend
-python -m http.server 4173
-# 浏览器访问 http://localhost:4173/index.static.html
+python -m http.server 5173
+# 浏览器访问 http://localhost:5173/index.static.html
 ```
 
 ### 后端地址配置
