@@ -36,10 +36,32 @@
  */
 
 /**
+ * 视频处理模块入口 ID。
+ * @type {string}
+ */
+export const VIDEO_PARENT_ID = "video-processing";
+
+/**
+ * 视频处理子模块 ID 列表。
+ * @type {string[]}
+ */
+export const VIDEO_SUBMODULE_IDS = ["extract-frames", "mp4-to-gif", "mp4-to-live-photo", "url-to-mp4"];
+
+/**
  * 模块信息集合，涵盖当前目录下的 Python 脚本。
  * @type {Module[]}
  */
 export const MODULES = [
+  {
+    id: VIDEO_PARENT_ID,
+    name: "视频处理",
+    summary: "集中管理视频相关的抽帧、格式转换与下载等能力。",
+    description: "进入后可选择不同的子模块，完成抽帧、GIF 转换、Live Photo 生成与在线视频下载。",
+    tags: [
+      { id: "media", label: "视频处理" },
+      { id: "collection", label: "子模块" }
+    ]
+  },
   {
     id: "extract-frames",
     name: "视频抽帧",

@@ -1,10 +1,11 @@
-import { MODULES } from "../data/modules.js";
+import { MODULES, VIDEO_PARENT_ID, VIDEO_SUBMODULE_IDS } from "../data/modules.js";
 import { BACKEND_BASE_URL } from "../core/config.js";
 import { render } from "../app/render.js";
 import { renderExtractFramesFields, setupExtractFramesForm } from "./forms/extractFrames.js";
 import { renderQrcodeFields, setupQrcodeForm } from "./forms/qrcode.js";
 import { renderResult, updateStatus } from "../ui/result.js";
 import { getModuleHistory } from "../core/history.js";
+import { setupVideoCropperForForm } from "./forms/videoCropper.js";
 
 /**
  * 生成面包屑导航。
@@ -20,16 +21,66 @@ const renderBreadcrumbs = (module) => `
 
 /**
  * 生成标签区块。
- * @param {{tags:Array<{label:string}>,endpoint:string}} module
+ * @param {{tags:Array<{label:string}>,endpoint?:string}} module
  * @returns {string}
  */
-const renderMeta = (module) => `
-  <div class="module-detail__meta">
-    ${module.tags.map((tag) => `<span class="module-detail__meta-item">${tag.label}</span>`).join("")}
-    <span class="module-detail__meta-item">API: ${module.endpoint}</span>
-    <span class="module-detail__meta-item">后端: ${BACKEND_BASE_URL}</span>
-  </div>
-`;
+const renderMeta = (module) => {
+  const tagItems = module.tags.map((tag) => `<span class="module-detail__meta-item">${tag.label}</span>`).join("");
+  const endpointItems = module.endpoint
+    ? `
+      <span class="module-detail__meta-item">API: ${module.endpoint}</span>
+      <span class="module-detail__meta-item">后端: ${BACKEND_BASE_URL}</span>
+    `
+    : "";
+  return `
+    <div class="module-detail__meta">
+      ${tagItems}
+      ${endpointItems}
+    </div>
+  `;
+};
+
+/**
+ * 获取视频子模块列表。
+ * @returns {Array<{id:string,name:string,summary:string,description:string,tags:Array<{label:string}>,endpoint?:string,externalUrl?:string}>}
+ */
+const getVideoSubModules = () =>
+  VIDEO_SUBMODULE_IDS.map((id) => MODULES.find((item) => item.id === id)).filter(Boolean);
+
+/**
+ * 渲染视频子模块卡片。
+ * @param {Array<{id:string,name:string,summary:string,tags:Array<{label:string}>,externalUrl?:string}>} modules
+ * @returns {string}
+ */
+const renderVideoSubmoduleCards = (modules) =>
+  modules
+    .map((module) => {
+      const isExternalLink = Boolean(module.externalUrl);
+      const actionButton = isExternalLink
+        ? `<a class="button" href="${module.externalUrl}" target="_blank" rel="noopener noreferrer">立即使用 →</a>`
+        : `<button class="button" data-navigate="${module.id}">立即使用 →</button>`;
+      const metaInfo = isExternalLink
+        ? `<span>外部链接</span>`
+        : `<span>脚本：${module.id.replace(/-/g, "_")}.py</span>`;
+      return `
+        <article class="module-card" data-module="${module.id}">
+          <div class="module-card__header">
+            <h3 class="module-card__title">${module.name}</h3>
+            <p class="module-card__summary">${module.summary}</p>
+            <div class="module-card__tags">
+              ${module.tags.map((tag) => `<span class="tag">${tag.label}</span>`).join("")}
+            </div>
+          </div>
+          <div class="module-card__meta">
+            ${metaInfo}
+          </div>
+          <div class="module-card__actions">
+            ${actionButton}
+          </div>
+        </article>
+      `;
+    })
+    .join("");
 
 /**
  * 生成字段输入控件。
@@ -99,6 +150,25 @@ export const renderModule = (moduleId) => {
     return;
   }
 
+  if (target.id === VIDEO_PARENT_ID) {
+    const subModules = getVideoSubModules();
+    render(`
+      ${renderBreadcrumbs(target)}
+      <section class="module-detail">
+        <header class="module-detail__header">
+          <h2 class="module-detail__title">${target.name}</h2>
+          <p class="module-detail__desc">${target.description}</p>
+          ${renderMeta(target)}
+        </header>
+        <div class="module-detail__body">
+          <h3 class="section__title">子模块</h3>
+          <div class="module-grid">${renderVideoSubmoduleCards(subModules)}</div>
+        </div>
+      </section>
+    `);
+    return;
+  }
+
   const fields =
     target.id === "extract-frames" || target.id === "mp4-to-gif"
       ? renderExtractFramesFields(target)
@@ -161,6 +231,10 @@ export const renderModule = (moduleId) => {
     const formEl = document.querySelector(`[data-module-form="${target.id}"]`);
     setupQrcodeForm(formEl);
   }
+
+  // 通用能力：为所有含视频上传的表单挂载“框选裁剪”组件（若无视频输入则自动 no-op）
+  const formEl = document.querySelector(`[data-module-form="${target.id}"]`);
+  setupVideoCropperForForm(formEl);
 };
 
 /**
