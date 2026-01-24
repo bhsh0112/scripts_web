@@ -1,11 +1,20 @@
-.venv/
+# Backend Result Files
 backend/storage/
 
+# VSCode
+.vscode/
+
 # Python
+# Virtual Environment
+.venv/
+# Python Cache
 __pycache__/
 
-# Node
+# Node.js
+# Node Modules
 node_modules/
+# Package Lock
+package-lock.json
 
-# MacOS
+# MacOS System Files
 ._*
