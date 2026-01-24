@@ -9,7 +9,12 @@ from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, StreamingResponse
+from fastapi.responses import (
+    JSONResponse,
+    HTMLResponse,
+    FileResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import quote, unquote
 
@@ -23,6 +28,7 @@ from .utils import (
     make_zip,
     save_upload_file,
 )
+from .job_meta import load_job_meta, save_job_meta
 
 # 将项目根目录加入路径，方便导入现有脚本
 if str(BASE_DIR) not in sys.path:
@@ -32,6 +38,7 @@ SCRIPTS_DIR = BASE_DIR / "scripts"
 
 from scripts.extract_frames import extract_frames  # noqa: E402
 from scripts.images_download import download_images_from_url  # noqa: E402
+
 try:
     from scripts.mp42mov import convert_to_live_photo  # noqa: E402
 except ModuleNotFoundError:
@@ -81,6 +88,21 @@ def health_check() -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+@app.get("/api/jobs/{module_id}/{job_id}")
+def api_get_job(module_id: str, job_id: str) -> JSONResponse:
+    """
+    查询指定模块下某个任务的元数据与结果，用于前端恢复历史任务。
+    目前主要用于 extract-frames 模块，其它模块可逐步接入。
+    """
+    try:
+        meta = load_job_meta(module_id, job_id)
+    except FileNotFoundError as exc:  # noqa: BLE001
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return JSONResponse(meta)
+
+
 @app.get("/api/download")
 def api_download(path: str):
     """
@@ -105,8 +127,11 @@ def api_download(path: str):
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+
 @app.get("/gif")
-def gif_view_page(request: Request, file: str, title: Optional[str] = None) -> HTMLResponse:
+def gif_view_page(
+    request: Request, file: str, title: Optional[str] = None
+) -> HTMLResponse:
     """
     微信友好：GIF 预览页。用于手机端长按保存/添加表情，或桌面端直接查看。
     参数 `file` 形如 /files/.../xxx.gif
@@ -185,6 +210,7 @@ def gif_view_page(request: Request, file: str, title: Optional[str] = None) -> H
 </html>"""
     return HTMLResponse(content=html)
 
+
 @app.get("/api/utils/qrcode")
 def api_utils_qrcode(url: str):
     """
@@ -196,14 +222,17 @@ def api_utils_qrcode(url: str):
         if not cleaned:
             raise ValueError("请输入有效的 URL")
         import qrcode  # type: ignore
+
         img = qrcode.make(cleaned)
         import io
+
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         buf.seek(0)
         return StreamingResponse(buf, media_type="image/png")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
 @app.post("/api/tasks/extract-frames")
 async def api_extract_frames(
@@ -214,7 +243,8 @@ async def api_extract_frames(
     output_dir: str = Form("frames"),
 ):
     job_id, job_dir = create_job_dir("extract-frames")
-    video_path = job_dir / video.filename
+    input_filename = (video.filename or "").strip() or "video"
+    video_path = job_dir / input_filename
     save_upload_file(video, video_path)
 
     output_dir_name = output_dir.strip() or "frames"
@@ -242,14 +272,20 @@ async def api_extract_frames(
     preview_limit = 8
     previews = files_urls[:preview_limit]
 
-    return {
+    result = {
         "message": f"抽帧完成，共生成 {saved} 张图片",
         "job_id": job_id,
+        "input_filename": input_filename,
         "archive": build_file_url(zip_path),
         "files": files_urls,
         "total_files": len(files_urls),
         "previews": previews,
     }
+
+    # 持久化任务元数据，便于后续查询与恢复
+    save_job_meta("extract-frames", job_id, result, status="success")
+
+    return result
 
 
 @app.post("/api/tasks/extract-single-frame")
@@ -327,7 +363,9 @@ async def api_mp4_to_gif(
     scale: Optional[float] = Form(None),
 ):
     if convert_mp4_to_gif is None:
-        raise HTTPException(status_code=503, detail="GIF 转换功能暂时不可用，请稍后重试")
+        raise HTTPException(
+            status_code=503, detail="GIF 转换功能暂时不可用，请稍后重试"
+        )
 
     job_id, job_dir = create_job_dir("mp4-to-gif")
     video_path = job_dir / video.filename
@@ -348,6 +386,7 @@ async def api_mp4_to_gif(
     if end_sec is None:
         try:
             from moviepy import VideoFileClip as _VideoFileClip  # type: ignore
+
             clip = _VideoFileClip(str(video_path))
             end = float(clip.duration or 0.0)
             clip.close()
@@ -413,7 +452,9 @@ async def api_mp4_to_live_photo(
     keyframe_time: Optional[float] = Form(None),
 ):
     if convert_to_live_photo is None:
-        raise HTTPException(status_code=503, detail="实况照片功能暂时不可用，请稍后重试")
+        raise HTTPException(
+            status_code=503, detail="实况照片功能暂时不可用，请稍后重试"
+        )
 
     job_id, job_dir = create_job_dir("mp4-to-live-photo")
     video_path = job_dir / video.filename
@@ -500,7 +541,7 @@ async def api_network_scan(network_range: str = Form(...)):
         "message": f"扫描完成，发现 {len(devices)} 台设备（{', '.join(networks) or '无效网段'}）",
         "networks": networks,
         "devices": devices,  # 保留：[{ip, mac, hostname?, open_ports?, category?, name?}]
-        "groups": grouped,   # 新增：分组输出
+        "groups": grouped,  # 新增：分组输出
     }
 
 
@@ -642,13 +683,16 @@ async def api_mp3_to_qrcode(
         "message": "已生成扫码播放的二维码",
         "job_id": job_id,
         "files": [qr_url, audio_rel_url],  # 同时返回二维码与音频文件
-        "previews": [qr_url],              # 结果预览展示二维码
-        "audio_url": audio_rel_url,        # 便于前端可选显示
+        "previews": [qr_url],  # 结果预览展示二维码
+        "audio_url": audio_rel_url,  # 便于前端可选显示
         "total_files": 2,
     }
 
+
 @app.get("/listen")
-def listen_page(request: Request, file: str, title: Optional[str] = None) -> HTMLResponse:
+def listen_page(
+    request: Request, file: str, title: Optional[str] = None
+) -> HTMLResponse:
     """
     简洁美观的音频播放页面。
     通过查询参数 `file`（应以 /files/ 开头的相对 URL）来定位音频文件。
@@ -823,7 +867,9 @@ async def api_video_to_qrcode(
     # 简单格式校验（常见视频后缀）
     valid_exts = {".mp4", ".mov", ".m4v", ".webm"}
     if video_path.suffix.lower() not in valid_exts:
-        raise HTTPException(status_code=400, detail=f"仅支持视频文件（{', '.join(sorted(valid_exts))}）")
+        raise HTTPException(
+            status_code=400, detail=f"仅支持视频文件（{', '.join(sorted(valid_exts))}）"
+        )
 
     # 构造视频相对 URL 与观看页 URL
     video_rel_url = build_file_url(video_path)
@@ -861,7 +907,9 @@ async def api_video_to_qrcode(
 
 
 @app.get("/watch")
-def watch_page(request: Request, file: str, title: Optional[str] = None) -> HTMLResponse:
+def watch_page(
+    request: Request, file: str, title: Optional[str] = None
+) -> HTMLResponse:
     """
     简洁美观的视频播放页面。
     通过查询参数 `file`（应以 /files/ 开头的相对 URL）来定位视频文件。
@@ -1177,7 +1225,9 @@ async def api_yolo_split_dataset(
         split_dataset(
             xml_path=str(xml_dir),
             txt_path=str(output_dir),
-            trainval_percent=float(trainval_ratio) if trainval_ratio is not None else 0.9,
+            trainval_percent=(
+                float(trainval_ratio) if trainval_ratio is not None else 0.9
+            ),
             train_percent=float(train_ratio) if train_ratio is not None else 0.9,
         )
     except Exception as exc:  # noqa: BLE001
@@ -1193,7 +1243,9 @@ async def api_yolo_split_dataset(
     }
 
 
-def _find_first_dir_with_extension(root: Path, extension: Optional[str]) -> Optional[Path]:
+def _find_first_dir_with_extension(
+    root: Path, extension: Optional[str]
+) -> Optional[Path]:
     for path in root.rglob("*"):
         if path.is_file():
             if extension is None:
@@ -1214,4 +1266,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
-
