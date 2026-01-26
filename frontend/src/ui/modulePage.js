@@ -3,6 +3,8 @@ import { BACKEND_BASE_URL } from "../core/config.js";
 import { render } from "../app/render.js";
 import { renderExtractFramesFields, setupExtractFramesForm } from "./forms/extractFrames.js";
 import { renderQrcodeFields, setupQrcodeForm } from "./forms/qrcode.js";
+import { renderResult, updateStatus } from "../ui/result.js";
+import { getModuleHistory } from "../core/history.js";
 import { setupVideoCropperForForm } from "./forms/videoCropper.js";
 
 /**
@@ -93,9 +95,8 @@ const renderField = (field) => {
     case "textarea":
       return `
         <div class="form__group">
-          <label class="form__label" for="${field.id}">${field.label}${
-            field.required ? "<sup>*</sup>" : ""
-          }</label>
+          <label class="form__label" for="${field.id}">${field.label}${field.required ? "<sup>*</sup>" : ""
+        }</label>
           <textarea class="textarea" ${baseAttributes} placeholder="${field.placeholder ?? ""}"></textarea>
           ${hint}
         </div>
@@ -103,9 +104,8 @@ const renderField = (field) => {
     case "select":
       return `
         <div class="form__group">
-          <label class="form__label" for="${field.id}">${field.label}${
-            field.required ? "<sup>*</sup>" : ""
-          }</label>
+          <label class="form__label" for="${field.id}">${field.label}${field.required ? "<sup>*</sup>" : ""
+        }</label>
           <select class="select" ${baseAttributes}>
             ${(field.options ?? []).map((option) => `<option value="${option}">${option}</option>`).join("")}
           </select>
@@ -115,9 +115,8 @@ const renderField = (field) => {
     case "file":
       return `
         <div class="form__group">
-          <label class="form__label" for="${field.id}">${field.label}${
-            field.required ? "<sup>*</sup>" : ""
-          }</label>
+          <label class="form__label" for="${field.id}">${field.label}${field.required ? "<sup>*</sup>" : ""
+        }</label>
           <input class="input" type="file" ${baseAttributes} ${field.accept ? `accept="${field.accept}"` : ""} />
           ${hint}
         </div>
@@ -125,9 +124,8 @@ const renderField = (field) => {
     default:
       return `
         <div class="form__group">
-          <label class="form__label" for="${field.id}">${field.label}${
-            field.required ? "<sup>*</sup>" : ""
-          }</label>
+          <label class="form__label" for="${field.id}">${field.label}${field.required ? "<sup>*</sup>" : ""
+        }</label>
           <input class="input" type="${field.type}" ${baseAttributes} placeholder="${field.placeholder ?? ""}" />
           ${hint}
         </div>
@@ -210,6 +208,15 @@ export const renderModule = (moduleId) => {
             </div>
           </div>
         </form>
+        ${target.id === "extract-frames"
+      ? `
+        <section class="module-detail__history" data-module-history="${target.id}">
+          <h3 class="module-detail__history-title">历史任务</h3>
+          <p class="module-detail__history-empty" data-history-empty>暂无历史任务。</p>
+          <ul class="module-detail__history-list" data-history-list></ul>
+        </section>`
+      : ""
+    }
       </div>
     </section>
   `);
@@ -217,6 +224,9 @@ export const renderModule = (moduleId) => {
   if (target.id === "extract-frames" || target.id === "mp4-to-gif") {
     const formEl = document.querySelector(`[data-module-form="${target.id}"]`);
     setupExtractFramesForm(formEl);
+    if (target.id === "extract-frames") {
+      setupExtractFramesHistory(target);
+    }
   } else if (target.id === "qrcode-generator") {
     const formEl = document.querySelector(`[data-module-form="${target.id}"]`);
     setupQrcodeForm(formEl);
@@ -226,4 +236,131 @@ export const renderModule = (moduleId) => {
   const formEl = document.querySelector(`[data-module-form="${target.id}"]`);
   setupVideoCropperForForm(formEl);
 };
+
+/**
+ * 初始化「视频抽帧」模块的历史任务列表。
+ * 使用本地存储的任务摘要，并通过后端 /api/jobs 接口恢复结果详情。
+ * @param {{id:string,name:string}} module
+ * @returns {void}
+ */
+const setupExtractFramesHistory = (module) => {
+  const panel = document.querySelector(`[data-module-history="${module.id}"]`);
+  const form = document.querySelector(`[data-module-form="${module.id}"]`);
+  if (!(panel instanceof HTMLElement) || !(form instanceof HTMLFormElement)) {
+    return;
+  }
+
+  const emptyEl = panel.querySelector("[data-history-empty]");
+  const listEl = panel.querySelector("[data-history-list]");
+  if (!(listEl instanceof HTMLUListElement)) {
+    return;
+  }
+
+  const entries = getModuleHistory(module.id);
+  if (!entries.length) {
+    if (emptyEl instanceof HTMLElement) {
+      emptyEl.hidden = false;
+    }
+    panel.hidden = false;
+    listEl.innerHTML = "";
+    return;
+  }
+
+  if (emptyEl instanceof HTMLElement) {
+    emptyEl.hidden = true;
+  }
+  panel.hidden = false;
+
+  const itemsHtml = entries
+    .map((entry) => {
+      const createdAt = entry.createdAt ? new Date(entry.createdAt) : null;
+      const timeText =
+        createdAt && !Number.isNaN(createdAt.getTime())
+          ? createdAt.toLocaleString()
+          : entry.createdAt || "";
+      const safeMessage = entry.message || "";
+      const jobId = entry.jobId;
+      const filename = entry.filename || "";
+      const filenameHtml = filename
+        ? `<span class="module-detail__history-filename">文件：${filename}</span>`
+        : "";
+      return `
+        <li class="module-detail__history-item">
+          <div class="module-detail__history-meta">
+            <span class="module-detail__history-time">${timeText}</span>
+            ${filenameHtml}
+          </div>
+          <div class="module-detail__history-message">${safeMessage}</div>
+          <button
+            class="button button--ghost module-detail__history-button"
+            type="button"
+            data-history-open
+            data-job-id="${jobId}"
+          >
+            查看结果
+          </button>
+        </li>
+      `;
+    })
+    .join("");
+
+  listEl.innerHTML = itemsHtml;
+
+  panel.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    if (!target.matches("[data-history-open]")) {
+      return;
+    }
+    const jobId = target.getAttribute("data-job-id") || "";
+    if (!jobId) {
+      return;
+    }
+
+    updateStatus(form, "info", "正在加载历史任务结果...", `任务编号：${jobId}`);
+
+    const url = new URL(`/api/jobs/${module.id}/${jobId}`, BACKEND_BASE_URL).toString();
+
+    void (async () => {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          let detail = `加载失败，状态码 ${response.status}`;
+          try {
+            const contentType = response.headers.get("content-type") || "";
+            if (contentType.includes("application/json")) {
+              const data = await response.json();
+              if (data && typeof data.detail === "string" && data.detail.trim() !== "") {
+                detail = data.detail.trim();
+              } else if (typeof data.message === "string" && data.message.trim() !== "") {
+                detail = data.message.trim();
+              }
+            } else {
+              const text = await response.text();
+              if (text && text.trim() !== "") detail = text.trim();
+            }
+          } catch (_e) {
+            // ignore
+          }
+          throw new Error(detail);
+        }
+
+        const payload = await response.json();
+        renderResult(form, module, payload);
+        updateStatus(form, "success", "已加载历史任务结果", `任务编号：${jobId}`);
+      } catch (error) {
+        const errorMessage =
+          error instanceof TypeError
+            ? `无法连接后端服务：${error.message}`
+            : error instanceof Error
+              ? error.message
+              : "未知错误";
+        updateStatus(form, "error", "加载历史任务失败", errorMessage);
+      }
+    })();
+  });
+};
+
 

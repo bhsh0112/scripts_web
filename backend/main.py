@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, StreamingResponse
+from fastapi.responses import (
+    JSONResponse,
+    HTMLResponse,
+    FileResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import quote, unquote
 
@@ -24,6 +30,7 @@ from .utils import (
     save_upload_file,
     maybe_prepare_cropped_video,
 )
+from .job_meta import load_job_meta, save_job_meta, update_job_progress
 
 # 将项目根目录加入路径，方便导入现有脚本
 if str(BASE_DIR) not in sys.path:
@@ -33,6 +40,7 @@ SCRIPTS_DIR = BASE_DIR / "scripts"
 
 from scripts.extract_frames import extract_frames  # noqa: E402
 from scripts.images_download import download_images_from_url  # noqa: E402
+
 try:
     from scripts.mp42mov import convert_to_live_photo  # noqa: E402
 except ModuleNotFoundError:
@@ -82,6 +90,21 @@ def health_check() -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+@app.get("/api/jobs/{module_id}/{job_id}")
+def api_get_job(module_id: str, job_id: str) -> JSONResponse:
+    """
+    查询指定模块下某个任务的元数据与结果，用于前端恢复历史任务。
+    目前主要用于 extract-frames 模块，其它模块可逐步接入。
+    """
+    try:
+        meta = load_job_meta(module_id, job_id)
+    except FileNotFoundError as exc:  # noqa: BLE001
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return JSONResponse(meta)
+
+
 @app.get("/api/download")
 def api_download(path: str):
     """
@@ -106,8 +129,11 @@ def api_download(path: str):
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+
 @app.get("/gif")
-def gif_view_page(request: Request, file: str, title: Optional[str] = None) -> HTMLResponse:
+def gif_view_page(
+    request: Request, file: str, title: Optional[str] = None
+) -> HTMLResponse:
     """
     微信友好：GIF 预览页。用于手机端长按保存/添加表情，或桌面端直接查看。
     参数 `file` 形如 /files/.../xxx.gif
@@ -186,6 +212,7 @@ def gif_view_page(request: Request, file: str, title: Optional[str] = None) -> H
 </html>"""
     return HTMLResponse(content=html)
 
+
 @app.get("/api/utils/qrcode")
 def api_utils_qrcode(url: str):
     """
@@ -197,8 +224,10 @@ def api_utils_qrcode(url: str):
         if not cleaned:
             raise ValueError("请输入有效的 URL")
         import qrcode  # type: ignore
+
         img = qrcode.make(cleaned)
         import io
+
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         buf.seek(0)
@@ -206,8 +235,144 @@ def api_utils_qrcode(url: str):
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+
+def _extract_frames_with_progress(
+    job_id: str,
+    video_path: Path,
+    start_sec: float,
+    end_sec: float,
+    n_fps: int,
+    output_path: Path,
+    output_dir_name: str,
+    input_filename: str,
+):
+    """
+    后台任务：执行视频抽帧并更新进度。
+    """
+    import cv2
+
+    try:
+        # 初始化 meta.json（状态：running）
+        update_job_progress("extract-frames", job_id, 0.0, "正在解析视频...", status="running")
+
+        # 打开视频文件
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise IOError("无法打开视频文件")
+
+        # 获取视频属性
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = total_frames / fps if fps > 0 else 0
+        if end_sec == -1:
+            end_sec = duration
+
+        # 验证时间范围有效性
+        if start_sec < 0 or end_sec > duration or start_sec >= end_sec:
+            cap.release()
+            raise ValueError(f"无效时间范围 (视频时长: {duration:.2f}秒)")
+
+        # 将秒转换为帧号
+        start_frame = int(start_sec * fps)
+        end_frame = min(int(end_sec * fps), total_frames - 1)
+
+        # 计算帧间隔
+        interval = max(1, int(round(fps / n_fps)))  # 至少间隔1帧
+
+        # 估算需要处理的帧数（用于进度计算）
+        frames_to_process = end_frame - start_frame + 1
+        estimated_saved = max(1, frames_to_process // interval)
+
+        update_job_progress(
+            "extract-frames",
+            job_id,
+            5.0,
+            f"开始抽帧：预计生成约 {estimated_saved} 张图片",
+            status="running",
+        )
+
+        # 定位到起始帧
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+        count = 0
+        saved_count = 0
+        current_frame = start_frame
+        last_progress_update = 0
+
+        while current_frame <= end_frame:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # 检查是否达到保存间隔
+            if count % interval == 0:
+                # 计算当前时间戳
+                timestamp = current_frame / fps
+                frame_path = output_path / f"{input_filename}_frame_{timestamp:.2f}s.jpg"
+                cv2.imwrite(str(frame_path), frame)
+                saved_count += 1
+
+                # 每保存 10 张图片或每 5% 进度更新一次
+                progress = 5.0 + ((current_frame - start_frame) / frames_to_process) * 85.0
+                if saved_count - last_progress_update >= 10 or progress - last_progress_update >= 5.0:
+                    update_job_progress(
+                        "extract-frames",
+                        job_id,
+                        progress,
+                        f"已抽取 {saved_count} 张图片...",
+                        status="running",
+                    )
+                    last_progress_update = progress
+
+            count += 1
+            current_frame += 1
+
+        cap.release()
+
+        if saved_count == 0:
+            raise ValueError("未生成任何图像文件")
+
+        # 打包阶段（90-95%）
+        update_job_progress("extract-frames", job_id, 90.0, "正在打包结果文件...", status="running")
+        zip_path = output_path.parent / f"{output_dir_name}.zip"
+        make_zip(output_path, zip_path)
+
+        # 生成文件列表（95-100%）
+        update_job_progress("extract-frames", job_id, 95.0, "正在生成文件列表...", status="running")
+        files = sorted(iter_files(output_path))
+        files_urls = [build_file_url(file_path) for file_path in files]
+        preview_limit = 8
+        previews = files_urls[:preview_limit]
+
+        result = {
+            "message": f"抽帧完成，共生成 {saved_count} 张图片",
+            "job_id": job_id,
+            "input_filename": input_filename,
+            "archive": build_file_url(zip_path),
+            "files": files_urls,
+            "total_files": len(files_urls),
+            "previews": previews,
+        }
+
+        # 最终保存（100%，状态：success）
+        save_job_meta("extract-frames", job_id, result, status="success")
+        update_job_progress("extract-frames", job_id, 100.0, "处理完成", status="success")
+
+    except Exception as exc:  # noqa: BLE001
+        # 保存错误信息
+        error_result = {
+            "job_id": job_id,
+            "input_filename": input_filename,
+            "message": f"处理失败：{str(exc)}",
+            "status": "failed",
+        }
+        save_job_meta("extract-frames", job_id, error_result, status="failed")
+        update_job_progress("extract-frames", job_id, 0.0, f"处理失败：{str(exc)}", status="failed")
+
+
 @app.post("/api/tasks/extract-frames")
 async def api_extract_frames(
+    background_tasks: BackgroundTasks,
     video: UploadFile = File(...),
     start_sec: Optional[float] = Form(None),
     end_sec: Optional[float] = Form(None),
@@ -218,43 +383,51 @@ async def api_extract_frames(
     crop_w: Optional[int] = Form(None),
     crop_h: Optional[int] = Form(None),
 ):
+    """
+    视频抽帧接口（异步模式）。
+    上传完成后立即返回 job_id，后台异步执行抽帧任务。
+    前端可通过 /api/jobs/extract-frames/{job_id} 轮询获取进度。
+    """
     job_id, job_dir = create_job_dir("extract-frames")
-    video_path = job_dir / video.filename
+    input_filename = (video.filename or "").strip() or "video"
+    video_path = job_dir / input_filename
     save_upload_file(video, video_path)
     video_path = maybe_prepare_cropped_video(job_dir, video_path, crop_x, crop_y, crop_w, crop_h)
 
     output_dir_name = output_dir.strip() or "frames"
     output_path = job_dir / output_dir_name
+    output_path.mkdir(parents=True, exist_ok=True)
 
-    try:
-        saved = extract_frames(
-            video_path=str(video_path),
-            start_sec=float(start_sec) if start_sec is not None else 0.0,
-            end_sec=float(end_sec) if end_sec is not None else -1,
-            n_fps=int(n_fps),
-            output_dir=str(output_path),
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    files = sorted(iter_files(output_path))
-    if not files:
-        raise HTTPException(status_code=500, detail="未生成任何图像文件")
-
-    zip_path = job_dir / f"{output_dir_name}.zip"
-    make_zip(output_path, zip_path)
-
-    files_urls = [build_file_url(file_path) for file_path in files]
-    preview_limit = 8
-    previews = files_urls[:preview_limit]
-
-    return {
-        "message": f"抽帧完成，共生成 {saved} 张图片",
+    # 初始化 meta.json（状态：pending）
+    initial_meta = {
         "job_id": job_id,
-        "archive": build_file_url(zip_path),
-        "files": files_urls,
-        "total_files": len(files_urls),
-        "previews": previews,
+        "input_filename": input_filename,
+        "message": "任务已创建，等待处理",
+        "status": "pending",
+        "progress": 0.0,
+        "progress_message": "任务已创建",
+    }
+    save_job_meta("extract-frames", job_id, initial_meta, status="pending")
+
+    # 启动后台任务
+    background_tasks.add_task(
+        _extract_frames_with_progress,
+        job_id=job_id,
+        video_path=video_path,
+        start_sec=float(start_sec) if start_sec is not None else 0.0,
+        end_sec=float(end_sec) if end_sec is not None else -1,
+        n_fps=int(n_fps),
+        output_path=output_path,
+        output_dir_name=output_dir_name,
+        input_filename=input_filename,
+    )
+
+    # 立即返回 job_id，前端开始轮询
+    return {
+        "job_id": job_id,
+        "message": "任务已创建，正在后台处理",
+        "status": "pending",
+        "input_filename": input_filename,
     }
 
 
@@ -355,7 +528,9 @@ async def api_mp4_to_gif(
     crop_h: Optional[int] = Form(None),
 ):
     if convert_mp4_to_gif is None:
-        raise HTTPException(status_code=503, detail="GIF 转换功能暂时不可用，请稍后重试")
+        raise HTTPException(
+            status_code=503, detail="GIF 转换功能暂时不可用，请稍后重试"
+        )
 
     job_id, job_dir = create_job_dir("mp4-to-gif")
     video_path = job_dir / video.filename
@@ -377,6 +552,7 @@ async def api_mp4_to_gif(
     if end_sec is None:
         try:
             from moviepy import VideoFileClip as _VideoFileClip  # type: ignore
+
             clip = _VideoFileClip(str(video_path))
             end = float(clip.duration or 0.0)
             clip.close()
@@ -446,7 +622,9 @@ async def api_mp4_to_live_photo(
     crop_h: Optional[int] = Form(None),
 ):
     if convert_to_live_photo is None:
-        raise HTTPException(status_code=503, detail="实况照片功能暂时不可用，请稍后重试")
+        raise HTTPException(
+            status_code=503, detail="实况照片功能暂时不可用，请稍后重试"
+        )
 
     job_id, job_dir = create_job_dir("mp4-to-live-photo")
     video_path = job_dir / video.filename
@@ -534,7 +712,7 @@ async def api_network_scan(network_range: str = Form(...)):
         "message": f"扫描完成，发现 {len(devices)} 台设备（{', '.join(networks) or '无效网段'}）",
         "networks": networks,
         "devices": devices,  # 保留：[{ip, mac, hostname?, open_ports?, category?, name?}]
-        "groups": grouped,   # 新增：分组输出
+        "groups": grouped,  # 新增：分组输出
     }
 
 
@@ -676,13 +854,16 @@ async def api_mp3_to_qrcode(
         "message": "已生成扫码播放的二维码",
         "job_id": job_id,
         "files": [qr_url, audio_rel_url],  # 同时返回二维码与音频文件
-        "previews": [qr_url],              # 结果预览展示二维码
-        "audio_url": audio_rel_url,        # 便于前端可选显示
+        "previews": [qr_url],  # 结果预览展示二维码
+        "audio_url": audio_rel_url,  # 便于前端可选显示
         "total_files": 2,
     }
 
+
 @app.get("/listen")
-def listen_page(request: Request, file: str, title: Optional[str] = None) -> HTMLResponse:
+def listen_page(
+    request: Request, file: str, title: Optional[str] = None
+) -> HTMLResponse:
     """
     简洁美观的音频播放页面。
     通过查询参数 `file`（应以 /files/ 开头的相对 URL）来定位音频文件。
@@ -861,7 +1042,9 @@ async def api_video_to_qrcode(
     # 简单格式校验（常见视频后缀）
     valid_exts = {".mp4", ".mov", ".m4v", ".webm"}
     if video_path.suffix.lower() not in valid_exts:
-        raise HTTPException(status_code=400, detail=f"仅支持视频文件（{', '.join(sorted(valid_exts))}）")
+        raise HTTPException(
+            status_code=400, detail=f"仅支持视频文件（{', '.join(sorted(valid_exts))}）"
+        )
 
     # 可选：按用户框选区域裁剪视频（像素坐标，基于原始分辨率）
     video_path = maybe_prepare_cropped_video(job_dir, video_path, crop_x, crop_y, crop_w, crop_h)
@@ -902,7 +1085,9 @@ async def api_video_to_qrcode(
 
 
 @app.get("/watch")
-def watch_page(request: Request, file: str, title: Optional[str] = None) -> HTMLResponse:
+def watch_page(
+    request: Request, file: str, title: Optional[str] = None
+) -> HTMLResponse:
     """
     简洁美观的视频播放页面。
     通过查询参数 `file`（应以 /files/ 开头的相对 URL）来定位视频文件。
@@ -1218,7 +1403,9 @@ async def api_yolo_split_dataset(
         split_dataset(
             xml_path=str(xml_dir),
             txt_path=str(output_dir),
-            trainval_percent=float(trainval_ratio) if trainval_ratio is not None else 0.9,
+            trainval_percent=(
+                float(trainval_ratio) if trainval_ratio is not None else 0.9
+            ),
             train_percent=float(train_ratio) if train_ratio is not None else 0.9,
         )
     except Exception as exc:  # noqa: BLE001
@@ -1234,7 +1421,9 @@ async def api_yolo_split_dataset(
     }
 
 
-def _find_first_dir_with_extension(root: Path, extension: Optional[str]) -> Optional[Path]:
+def _find_first_dir_with_extension(
+    root: Path, extension: Optional[str]
+) -> Optional[Path]:
     for path in root.rglob("*"):
         if path.is_file():
             if extension is None:
@@ -1255,4 +1444,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
-
