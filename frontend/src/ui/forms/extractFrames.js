@@ -873,6 +873,11 @@ const pollJobProgress = async (form, module, jobId, filename) => {
           filename
         });
 
+        // 刷新历史记录列表，使新记录立即显示
+        window.dispatchEvent(
+          new CustomEvent("module-history-refresh", { detail: { moduleId: module.id } })
+        );
+
         updateStatus(form, "success", successMessage, metaText);
         renderResult(form, module, data);
         return; // 停止轮询
