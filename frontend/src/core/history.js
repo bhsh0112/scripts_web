@@ -81,4 +81,24 @@ export const getModuleHistory = (moduleId) => {
     return list.filter((item) => item.moduleId === moduleId);
 };
 
+/**
+ * 从本地历史中移除指定模块下的一条任务记录。
+ * @param {string} moduleId 模块 ID（如 extract-frames）
+ * @param {string} jobId 任务 ID
+ * @returns {void}
+ */
+export const removeHistoryEntry = (moduleId, jobId) => {
+    if (
+        typeof moduleId !== "string" || moduleId.trim() === "" ||
+        typeof jobId !== "string" || jobId.trim() === ""
+    ) {
+        return;
+    }
+    const list = loadHistory();
+    const filtered = list.filter(
+        (item) => !(item.moduleId === moduleId && item.jobId === jobId)
+    );
+    saveHistory(filtered);
+};
+
 

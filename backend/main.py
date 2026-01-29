@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile, Request
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    Request,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     JSONResponse,
@@ -31,6 +41,7 @@ from .utils import (
     maybe_prepare_cropped_video,
 )
 from .job_meta import load_job_meta, save_job_meta, update_job_progress
+from .pack_archive import make_zip_with_progress
 
 # 将项目根目录加入路径，方便导入现有脚本
 if str(BASE_DIR) not in sys.path:
@@ -103,6 +114,39 @@ def api_get_job(module_id: str, job_id: str) -> JSONResponse:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return JSONResponse(meta)
+
+
+@app.delete("/api/jobs/{module_id}/{job_id}")
+def api_delete_job(module_id: str, job_id: str) -> JSONResponse:
+    """
+    删除指定模块下某个任务的结果目录（含本地存储的帧图、压缩包等）。
+    目前仅支持 extract-frames 模块；前端删除历史记录时调用此接口同步清理服务端。
+    """
+    if not job_id or not job_id.strip():
+        raise HTTPException(status_code=400, detail="job_id 不能为空")
+    # 仅允许删除已知模块，避免路径遍历
+    if module_id not in ("extract-frames",):
+        raise HTTPException(
+            status_code=400, detail=f"不支持删除模块 {module_id} 的任务"
+        )
+    job_dir = STORAGE_DIR / module_id / job_id.strip()
+    try:
+        resolved = job_dir.resolve()
+        base = STORAGE_DIR.resolve()
+        if not str(resolved).startswith(str(base)) or resolved == base:
+            raise HTTPException(status_code=400, detail="非法任务路径")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not job_dir.exists() or not job_dir.is_dir():
+        return JSONResponse({"deleted": True, "message": "任务目录不存在或已删除"})
+    try:
+        shutil.rmtree(job_dir)
+    except OSError as exc:  # noqa: BLE001
+        # 目录已被删除（如重复请求、双击）：视为成功，避免前端报错
+        if getattr(exc, "errno", None) == errno.ENOENT:
+            return JSONResponse({"deleted": True, "message": "已删除"})
+        raise HTTPException(status_code=500, detail=f"删除目录失败：{exc}") from exc
+    return JSONResponse({"deleted": True, "message": "已删除"})
 
 
 @app.get("/api/download")
@@ -253,7 +297,9 @@ def _extract_frames_with_progress(
 
     try:
         # 初始化 meta.json（状态：running）
-        update_job_progress("extract-frames", job_id, 0.0, "正在解析视频...", status="running")
+        update_job_progress(
+            "extract-frames", job_id, 0.0, "正在解析视频...", status="running"
+        )
 
         # 打开视频文件
         cap = cv2.VideoCapture(str(video_path))
@@ -308,13 +354,20 @@ def _extract_frames_with_progress(
             if count % interval == 0:
                 # 计算当前时间戳
                 timestamp = current_frame / fps
-                frame_path = output_path / f"{input_filename}_frame_{timestamp:.2f}s.jpg"
+                frame_path = (
+                    output_path / f"{input_filename}_frame_{timestamp:.2f}s.jpg"
+                )
                 cv2.imwrite(str(frame_path), frame)
                 saved_count += 1
 
                 # 每保存 10 张图片或每 5% 进度更新一次
-                progress = 5.0 + ((current_frame - start_frame) / frames_to_process) * 85.0
-                if saved_count - last_progress_update >= 10 or progress - last_progress_update >= 5.0:
+                progress = (
+                    5.0 + ((current_frame - start_frame) / frames_to_process) * 95.0
+                )
+                if (
+                    saved_count - last_progress_update >= 10
+                    or progress - last_progress_update >= 5.0
+                ):
                     update_job_progress(
                         "extract-frames",
                         job_id,
@@ -332,13 +385,16 @@ def _extract_frames_with_progress(
         if saved_count == 0:
             raise ValueError("未生成任何图像文件")
 
-        # 打包阶段（90-95%）
-        update_job_progress("extract-frames", job_id, 90.0, "正在打包结果文件...", status="running")
-        zip_path = output_path.parent / f"{output_dir_name}.zip"
-        make_zip(output_path, zip_path)
+        # 打包阶段，带进度回调写入 meta
+        def on_zip_progress(zip_percent: float, message: str) -> None:
+            update_job_progress(
+                "extract-frames", job_id, zip_percent, message, status="running"
+            )
 
-        # 生成文件列表（95-100%）
-        update_job_progress("extract-frames", job_id, 95.0, "正在生成文件列表...", status="running")
+        zip_path = output_path.parent / f"{output_dir_name}.zip"
+        make_zip_with_progress(output_path, zip_path, progress_callback=on_zip_progress)
+
+        # 生成文件列表
         files = sorted(iter_files(output_path))
         files_urls = [build_file_url(file_path) for file_path in files]
         preview_limit = 8
@@ -356,7 +412,9 @@ def _extract_frames_with_progress(
 
         # 最终保存（100%，状态：success）
         save_job_meta("extract-frames", job_id, result, status="success")
-        update_job_progress("extract-frames", job_id, 100.0, "处理完成", status="success")
+        update_job_progress(
+            "extract-frames", job_id, 100.0, "处理完成", status="success"
+        )
 
     except Exception as exc:  # noqa: BLE001
         # 保存错误信息
@@ -367,7 +425,9 @@ def _extract_frames_with_progress(
             "status": "failed",
         }
         save_job_meta("extract-frames", job_id, error_result, status="failed")
-        update_job_progress("extract-frames", job_id, 0.0, f"处理失败：{str(exc)}", status="failed")
+        update_job_progress(
+            "extract-frames", job_id, 0.0, f"处理失败：{str(exc)}", status="failed"
+        )
 
 
 @app.post("/api/tasks/extract-frames")
@@ -392,7 +452,9 @@ async def api_extract_frames(
     input_filename = (video.filename or "").strip() or "video"
     video_path = job_dir / input_filename
     save_upload_file(video, video_path)
-    video_path = maybe_prepare_cropped_video(job_dir, video_path, crop_x, crop_y, crop_w, crop_h)
+    video_path = maybe_prepare_cropped_video(
+        job_dir, video_path, crop_x, crop_y, crop_w, crop_h
+    )
 
     output_dir_name = output_dir.strip() or "frames"
     output_path = job_dir / output_dir_name
@@ -479,7 +541,12 @@ async def api_extract_single_frame(
             raise ValueError("无法读取指定时刻的视频帧")
 
         # 可选：按用户框选区域裁剪帧（像素坐标，基于原始分辨率）
-        if crop_x is not None and crop_y is not None and crop_w is not None and crop_h is not None:
+        if (
+            crop_x is not None
+            and crop_y is not None
+            and crop_w is not None
+            and crop_h is not None
+        ):
             x = max(0, int(crop_x))
             y = max(0, int(crop_y))
             w = max(0, int(crop_w))
@@ -535,7 +602,9 @@ async def api_mp4_to_gif(
     job_id, job_dir = create_job_dir("mp4-to-gif")
     video_path = job_dir / video.filename
     save_upload_file(video, video_path)
-    video_path = maybe_prepare_cropped_video(job_dir, video_path, crop_x, crop_y, crop_w, crop_h)
+    video_path = maybe_prepare_cropped_video(
+        job_dir, video_path, crop_x, crop_y, crop_w, crop_h
+    )
 
     # 输出 GIF 文件名采用源视频名
     output_path = job_dir / f"{video_path.stem}.gif"
@@ -629,7 +698,9 @@ async def api_mp4_to_live_photo(
     job_id, job_dir = create_job_dir("mp4-to-live-photo")
     video_path = job_dir / video.filename
     save_upload_file(video, video_path)
-    video_path = maybe_prepare_cropped_video(job_dir, video_path, crop_x, crop_y, crop_w, crop_h)
+    video_path = maybe_prepare_cropped_video(
+        job_dir, video_path, crop_x, crop_y, crop_w, crop_h
+    )
 
     prefix = job_dir / (output_prefix.strip() or "live_photo")
     prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -1047,7 +1118,9 @@ async def api_video_to_qrcode(
         )
 
     # 可选：按用户框选区域裁剪视频（像素坐标，基于原始分辨率）
-    video_path = maybe_prepare_cropped_video(job_dir, video_path, crop_x, crop_y, crop_w, crop_h)
+    video_path = maybe_prepare_cropped_video(
+        job_dir, video_path, crop_x, crop_y, crop_w, crop_h
+    )
 
     # 构造视频相对 URL 与观看页 URL
     video_rel_url = build_file_url(video_path)

@@ -4,7 +4,7 @@ import { render } from "../app/render.js";
 import { renderExtractFramesFields, setupExtractFramesForm } from "./forms/extractFrames.js";
 import { renderQrcodeFields, setupQrcodeForm } from "./forms/qrcode.js";
 import { renderResult, updateStatus } from "../ui/result.js";
-import { getModuleHistory } from "../core/history.js";
+import { getModuleHistory, removeHistoryEntry } from "../core/history.js";
 import { setupVideoCropperForForm } from "./forms/videoCropper.js";
 
 /**
@@ -291,14 +291,24 @@ const setupExtractFramesHistory = (module) => {
             ${filenameHtml}
           </div>
           <div class="module-detail__history-message">${safeMessage}</div>
-          <button
-            class="button button--ghost module-detail__history-button"
-            type="button"
-            data-history-open
-            data-job-id="${jobId}"
-          >
-            查看结果
-          </button>
+          <div class="module-detail__history-actions">
+            <button
+              class="button button--ghost module-detail__history-button"
+              type="button"
+              data-history-open
+              data-job-id="${jobId}"
+            >
+              查看结果
+            </button>
+            <button
+              class="button button--ghost module-detail__history-button"
+              type="button"
+              data-history-delete
+              data-job-id="${jobId}"
+            >
+              删除记录
+            </button>
+          </div>
         </li>
       `;
     })
@@ -306,61 +316,114 @@ const setupExtractFramesHistory = (module) => {
 
   listEl.innerHTML = itemsHtml;
 
-  panel.addEventListener("click", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
-    if (!target.matches("[data-history-open]")) {
-      return;
-    }
-    const jobId = target.getAttribute("data-job-id") || "";
-    if (!jobId) {
-      return;
-    }
-
-    updateStatus(form, "info", "正在加载历史任务结果...", `任务编号：${jobId}`);
-
-    const url = new URL(`/api/jobs/${module.id}/${jobId}`, BACKEND_BASE_URL).toString();
-
-    void (async () => {
-      try {
-        const response = await fetch(url);
-        if (!response.ok) {
-          let detail = `加载失败，状态码 ${response.status}`;
-          try {
-            const contentType = response.headers.get("content-type") || "";
-            if (contentType.includes("application/json")) {
-              const data = await response.json();
-              if (data && typeof data.detail === "string" && data.detail.trim() !== "") {
-                detail = data.detail.trim();
-              } else if (typeof data.message === "string" && data.message.trim() !== "") {
-                detail = data.message.trim();
-              }
-            } else {
-              const text = await response.text();
-              if (text && text.trim() !== "") detail = text.trim();
-            }
-          } catch (_e) {
-            // ignore
-          }
-          throw new Error(detail);
-        }
-
-        const payload = await response.json();
-        renderResult(form, module, payload);
-        updateStatus(form, "success", "已加载历史任务结果", `任务编号：${jobId}`);
-      } catch (error) {
-        const errorMessage =
-          error instanceof TypeError
-            ? `无法连接后端服务：${error.message}`
-            : error instanceof Error
-              ? error.message
-              : "未知错误";
-        updateStatus(form, "error", "加载历史任务失败", errorMessage);
+  // 点击监听只绑定一次，避免刷新列表时重复绑定导致一次点击触发多次请求
+  if (panel.getAttribute("data-history-bound") !== "true") {
+    panel.setAttribute("data-history-bound", "true");
+    panel.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
       }
-    })();
-  });
+      const jobId = target.getAttribute("data-job-id") || "";
+      if (!jobId) {
+        return;
+      }
+
+      if (target.matches("[data-history-delete]")) {
+        const deleteBtn = target;
+        deleteBtn.disabled = true;
+        const deleteUrl = new URL(`/api/jobs/${module.id}/${jobId}`, BACKEND_BASE_URL).toString();
+        void (async () => {
+          try {
+            const response = await fetch(deleteUrl, { method: "DELETE" });
+            if (!response.ok) {
+              let detail = `删除失败，状态码 ${response.status}`;
+              try {
+                const contentType = response.headers.get("content-type") || "";
+                if (contentType.includes("application/json")) {
+                  const data = await response.json();
+                  if (data && typeof data.detail === "string" && data.detail.trim() !== "") {
+                    detail = data.detail.trim();
+                  }
+                } else {
+                  const text = await response.text();
+                  if (text && text.trim() !== "") detail = text.trim();
+                }
+              } catch (_e) {
+                // ignore
+              }
+              throw new Error(detail);
+            }
+            removeHistoryEntry(module.id, jobId);
+            setupExtractFramesHistory(module);
+            updateStatus(form, "success", "已删除历史记录", "");
+          } catch (error) {
+            deleteBtn.disabled = false;
+            const errorMessage =
+              error instanceof Error ? error.message : "删除失败";
+            updateStatus(form, "error", "删除历史记录失败", errorMessage);
+          }
+        })();
+        return;
+      }
+
+      if (!target.matches("[data-history-open]")) {
+        return;
+      }
+
+      updateStatus(form, "info", "正在加载历史任务结果...", `任务编号：${jobId}`);
+
+      const url = new URL(`/api/jobs/${module.id}/${jobId}`, BACKEND_BASE_URL).toString();
+
+      void (async () => {
+        try {
+          const response = await fetch(url);
+          if (!response.ok) {
+            let detail = `加载失败，状态码 ${response.status}`;
+            try {
+              const contentType = response.headers.get("content-type") || "";
+              if (contentType.includes("application/json")) {
+                const data = await response.json();
+                if (data && typeof data.detail === "string" && data.detail.trim() !== "") {
+                  detail = data.detail.trim();
+                } else if (typeof data.message === "string" && data.message.trim() !== "") {
+                  detail = data.message.trim();
+                }
+              } else {
+                const text = await response.text();
+                if (text && text.trim() !== "") detail = text.trim();
+              }
+            } catch (_e) {
+              // ignore
+            }
+            throw new Error(detail);
+          }
+
+          const payload = await response.json();
+          renderResult(form, module, payload);
+          updateStatus(form, "success", "已加载历史任务结果", `任务编号：${jobId}`);
+        } catch (error) {
+          const errorMessage =
+            error instanceof TypeError
+              ? `无法连接后端服务：${error.message}`
+              : error instanceof Error
+                ? error.message
+                : "未知错误";
+          updateStatus(form, "error", "加载历史任务失败", errorMessage);
+        }
+      })();
+    });
+  }
 };
+
+// 任务完成后刷新历史记录列表（确保新记录显示）
+window.addEventListener("module-history-refresh", (event) => {
+  const moduleId = event.detail?.moduleId;
+  if (!moduleId) return;
+  const module = MODULES.find((m) => m.id === moduleId);
+  if (!module) return;
+  if (!document.querySelector(`[data-module-history="${moduleId}"]`)) return;
+  setupExtractFramesHistory(module);
+});
 
 
